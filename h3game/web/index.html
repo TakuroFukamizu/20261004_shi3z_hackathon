@@ -1,0 +1,174 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>H3 ゲーム</title>
+<style>
+ html,body{height:100%;margin:0;background:#14161b;color:#eee;font-family:-apple-system,"Hiragino Sans",sans-serif;font-size:17px}
+ #setup{padding:22px 30px 40px;max-width:1280px;margin:0 auto}
+ h1{font-size:26px;margin:0 0 4px}h2{font-size:18px;margin:26px 0 10px;color:#9fc}
+ .sub{color:#aaa;font-size:14px}
+ .row{display:flex;gap:16px;flex-wrap:wrap}
+ .card{background:#23262e;border-radius:12px;padding:14px 16px;min-width:210px;flex:1}
+ .card h3{margin:0 0 6px;font-size:17px}.name{font-size:13px;color:#bbb;min-height:1.2em;word-break:break-all}
+ .ok{color:#6f6}.ng{color:#f77}.wait{color:#fc6}
+ .bar{position:relative;height:14px;background:#0d0e11;border-radius:7px;margin:4px 0 8px;overflow:hidden}
+ .bar i{position:absolute;top:0;bottom:0;background:#4c9;border-radius:7px}
+ .lbl{font-size:13px;color:#ccc;display:flex;justify-content:space-between}
+ .xy{width:140px;height:140px;background:#0d0e11;border-radius:12px;position:relative;margin:6px auto}
+ .xy b{position:absolute;width:20px;height:20px;border-radius:50%;background:#4c9;margin:-10px 0 0 -10px}
+ .xy:before,.xy:after{content:"";position:absolute;background:#333}.xy:before{left:50%;top:0;bottom:0;width:1px}.xy:after{top:50%;left:0;right:0;height:1px}
+ .btns{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.btns span{width:20px;height:20px;border-radius:4px;background:#333;font-size:10px;display:flex;align-items:center;justify-content:center;color:#888}
+ .btns span.on{background:#fc6;color:#000}
+ button{font-size:15px;padding:8px 14px;border-radius:8px;border:0;background:#456;color:#fff;cursor:pointer;font-family:inherit}button:hover{background:#578}
+ button.on{background:#c83}
+ #go{font-size:24px;padding:16px 56px;background:#2a8;border-radius:12px;font-weight:700}#go:hover{background:#3b9}
+ #hint{background:#3a3320;border-left:4px solid #fc6;padding:9px 14px;border-radius:6px;margin:14px 0;font-size:15px}
+ label{display:inline-flex;align-items:center;gap:6px;margin-right:16px;cursor:pointer}
+ input[type=range]{width:260px;vertical-align:middle}
+ .scene{perspective:500px;width:200px;height:150px;margin:0 auto;display:flex;align-items:center;justify-content:center}
+ #seat{width:110px;height:110px;border-radius:14px;background:linear-gradient(#3a6,#274);border-top:10px solid #fc6;box-sizing:border-box;display:flex;align-items:center;justify-content:center;color:#031;font-size:13px;font-weight:700}
+ .line{margin:10px 0}
+ #play{display:none;position:fixed;inset:0;background:#000}
+ #play canvas{display:block;width:100%;height:100%}
+ #hud{position:fixed;bottom:10px;right:14px;font-size:13px;opacity:.6}
+ body.play{overflow:hidden}body.play #setup{display:none}body.play #play{display:block}
+</style></head><body>
+<div id="setup">
+ <h1>H3 ゲーム ― スタート前の確認</h1>
+ <div class="sub">席(H3)と、スティック・ペダルがつながっているかを確かめてからスタートします。機器が無くてもキーボードで動きます(矢印/WASD=スティック1、Q/E=ペダル、スペース=トリガー)。</div>
+ <div id="hint"></div>
+
+ <h2>入力(スティック・ペダル)</h2>
+ <div class="row" id="devs"></div>
+ <div class="line"><button id="bCenter">今の位置を中央にする</button> <button id="bAuto">割り当てを自動に戻す</button>
+  <span class="sub" id="src"></span></div>
+
+ <h2>席(H3)</h2>
+ <div class="row">
+  <div class="card" style="flex:2">
+   <div id="h3st"></div>
+   <div class="line">揺れの大きさ <input type="range" id="gain" min="0.1" max="0.6" step="0.05"> <b id="gainv"></b>
+    <span class="sub">(最初は 0.35。人を乗せる前に空の席で確かめる)</span></div>
+   <div class="line">向きを逆にする
+    <label><input type="checkbox" id="inv_pitch">前後</label><label><input type="checkbox" id="inv_roll">左右</label><label><input type="checkbox" id="inv_yaw">横振り</label></div>
+   <div class="line"><button data-sway="roll">左右に揺らす</button> <button data-sway="pitch">前後に揺らす</button> <button data-sway="yaw">横振り</button> <button data-sway="">止める(中央)</button>
+    <span class="sub">3秒だけ動きます</span></div>
+   <div class="line"><button id="bLive">スティックで席を動かす(テスト)</button> <button id="bRe">H3 をつなぎ直す</button></div>
+  </div>
+  <div class="card" style="max-width:300px">
+   <h3>席へ送っている動き</h3>
+   <div class="scene"><div id="seat">前</div></div>
+   <div class="lbl"><span>前後</span><span id="m_pitch"></span></div><div class="bar" id="b_pitch"><i></i></div>
+   <div class="lbl"><span>左右</span><span id="m_roll"></span></div><div class="bar" id="b_roll"><i></i></div>
+   <div class="lbl"><span>横振り</span><span id="m_yaw"></span></div><div class="bar" id="b_yaw"><i></i></div>
+  </div>
+ </div>
+
+ <div style="text-align:center;margin-top:30px"><button id="go">スタート</button>
+  <div class="sub" style="margin-top:8px">Enter でもスタート。ゲーム中は Esc でこの画面に戻ります。</div></div>
+</div>
+<div id="play"><canvas id="c"></canvas><div id="hud"></div></div>
+
+<script src="input.js"></script>
+<script src="game.js"></script>
+<script>
+// ===== 土台: 入力をまとめる → (確認画面 or ゲーム) → 席へ送る =====
+const OWNER=(typeof __OWNER__==='undefined')?1:__OWNER__;   // bridge が番号に置き換える。-1 は「見るだけ」
+const STANDALONE=H3Input.STANDALONE;
+const $=id=>document.getElementById(id);
+const clamp=v=>Math.max(-1,Math.min(1,v));
+const AX=['pitch','roll','yaw'];
+
+// ---- 設定(この PC に保存) ----
+let cfg={gain:0.35,inv:{pitch:false,roll:false,yaw:false}};
+try{const s=JSON.parse(localStorage.getItem('h3_game_cfg'));if(s){cfg.gain=Math.min(0.6,Math.max(0.1,+s.gain||0.35));Object.assign(cfg.inv,s.inv||{})}}catch(e){}
+function saveCfg(){try{localStorage.setItem('h3_game_cfg',JSON.stringify(cfg))}catch(e){}}
+
+// ---- 入力: スティック・ペダル + キーボード を1つにまとめる ----
+const keys={};
+addEventListener('keydown',e=>{keys[e.code]=true;
+ if(e.code==='Enter'&&phase==='setup')startGame();
+ if(e.code==='Escape'&&phase==='play')toSetup();
+ if(phase==='play'&&/^(Arrow|Space)/.test(e.code))e.preventDefault()});
+addEventListener('keyup',e=>{keys[e.code]=false});
+addEventListener('blur',()=>{for(const k in keys)keys[k]=false});
+const k=(...c)=>c.some(q=>keys[q])?1:0;
+function readInput(){const v=H3Input.values();const b1=H3Input.buttons('stick1'),b2=H3Input.buttons('stick2');
+ return {x:clamp(v.stick1_x+k('ArrowRight','KeyD')-k('ArrowLeft','KeyA')),
+  y:clamp(v.stick1_y+k('ArrowDown','KeyS')-k('ArrowUp','KeyW')),   // 奥へ倒す = マイナス
+  twist:v.stick1_twist,throttle:v.stick1_throttle,
+  x2:v.stick2_x,y2:v.stick2_y,twist2:v.stick2_twist,throttle2:v.stick2_throttle,
+  rudder:clamp(v.rudder+k('KeyE')-k('KeyQ')),brakeL:v.brake_l,brakeR:v.brake_r,
+  fire:!!(b1[0]||keys.Space),fire2:!!b2[0],buttons1:b1,buttons2:b2,raw:v}}
+
+// ---- 席: target に -1..1 を入れると、なめらかに追いかけて 30回/秒 で bridge に送る ----
+let target={pitch:0,roll:0,yaw:0},cur={pitch:0,roll:0,yaw:0},st={};
+function sendSeat(){if(STANDALONE)return;
+ const o={owner:OWNER,gain:cfg.gain};
+ for(const a of AX)o[a]=document.hidden?0:cur[a]*(cfg.inv[a]?-1:1);   // 画面が隠れたら中央へ
+ fetch('/',{method:'POST',body:JSON.stringify(o)}).catch(()=>{})}
+if(!STANDALONE){setInterval(sendSeat,1000/30);
+ const poll=()=>fetch('/state').then(r=>r.json()).then(s=>st=s).catch(()=>{st={down:true}});poll();setInterval(poll,1000)}
+
+// ---- 確認画面 ----
+let phase='setup',swayAxis='',swayT=0,live=false;
+const DEVS=[{dev:'stick1',label:'スティック1'},{dev:'stick2',label:'スティック2'},{dev:'pedals',label:'ペダル'}];
+function bar(v,one){const w=one?Math.max(0,v)*100:Math.abs(v)*50;const left=one?0:(v<0?50-w:50);return `<div class="bar"><i style="left:${left}%;width:${w}%"></i></div>`}
+function renderSetup(inp){const v=inp.raw;
+ $('devs').innerHTML=DEVS.map(d=>{const p=H3Input.padFor(d.dev);let body;
+  if(d.dev==='pedals')body=`<div class="lbl"><span>左右(舵)</span><span>${v.rudder.toFixed(2)}</span></div>${bar(v.rudder)}
+   <div class="lbl"><span>左を踏む</span><span>${v.brake_l.toFixed(2)}</span></div>${bar(v.brake_l,1)}<div class="lbl"><span>右を踏む</span><span>${v.brake_r.toFixed(2)}</span></div>${bar(v.brake_r,1)}`;
+  else{const x=v[d.dev+'_x'],y=v[d.dev+'_y'];body=`<div class="xy"><b style="left:${50+x*45}%;top:${50+y*45}%"></b></div>
+   <div class="lbl"><span>左右 ${x.toFixed(2)}</span><span>前後 ${y.toFixed(2)}</span></div>
+   <div class="lbl"><span>ひねり</span><span>${v[d.dev+'_twist'].toFixed(2)}</span></div>${bar(v[d.dev+'_twist'])}
+   <div class="lbl"><span>スロットル</span><span>${v[d.dev+'_throttle'].toFixed(2)}</span></div>${bar(v[d.dev+'_throttle'],1)}`}
+  const btns=p?`<div class="btns">${p.buttons.map((b,i)=>`<span class="${b?'on':''}">${i+1}</span>`).join('')}</div>`:'';
+  return `<div class="card"><h3><span class="${p?'ok':'ng'}">●</span> ${d.label}</h3><div class="name">${p?p.id:'未検出'}</div>${p?body+btns:'<div class="sub" style="margin-top:10px">ボタンを1回押すか、大きく倒してください</div>'}</div>`}).join('')
+  +`<div class="card"><h3><span class="ok">●</span> ゲームに渡る値</h3><div class="name">スティック1 + キーボード</div>
+   <div class="xy"><b style="left:${50+inp.x*45}%;top:${50+inp.y*45}%;background:${inp.fire?'#fc6':'#4c9'}"></b></div>
+   <div class="lbl"><span>左右 ${inp.x.toFixed(2)}</span><span>前後 ${inp.y.toFixed(2)}</span></div>
+   <div class="lbl"><span>ペダル</span><span>${inp.rudder.toFixed(2)}</span></div>${bar(inp.rudder)}
+   <div class="lbl"><span>トリガー</span><span>${inp.fire?'押している':'-'}</span></div></div>`;
+ const have=DEVS.filter(d=>H3Input.padFor(d.dev)).length;
+ $('src').textContent=H3Input.pads().length?`読み取り: ${H3Input.source()==='mac'?'Mac 側(bridge)':'ブラウザ'}`:'';
+ const seat=STANDALONE?'<span class="wait">ファイルとして開いているので席は動きません。</span>':st.down?'<span class="ng">bridge が止まっています(start.command を起動)。</span>':
+  OWNER<0?'<span class="wait">この画面は「見るだけ」です(席を動かせるのは bridge を動かしている PC の画面だけ)。</span>':
+  st.connected?'<span class="ok">席 OK。</span>':'<span class="ng">席が未接続(画面だけ動きます)。</span>';
+ $('hint').innerHTML=seat+' '+(have===3?'<span class="ok">入力 3/3 OK。</span>':`<span class="wait">入力 ${have}/3。</span> 見えていない機器はボタンを1回押すか大きく倒す。無くてもキーボードで遊べます。`);
+ $('h3st').innerHTML=STANDALONE?'bridge 経由(http://localhost:8891)で開くと席が動きます':st.down?'<span class="ng">● bridge に届きません</span>':
+  st.connected?`<span class="ok">● H3 接続中</span> <span class="sub">${st.port||''}</span>`:'<span class="ng">● H3 未接続</span> <span class="sub">USB と電源を確認。挿すと数秒で自動でつながります</span>';
+ $('bLive').classList.toggle('on',live);$('bLive').textContent=live?'スティックで席を動かす: 入(押すと切)':'スティックで席を動かす(テスト)';
+ // 席の動き: 試し揺れ > スティック連動 > 中央
+ if(swayT>0){const s=Math.sin(performance.now()/300)*0.5;for(const a of AX)target[a]=a===swayAxis?s:0}
+ else if(live){target.pitch=inp.y;target.roll=inp.x;target.yaw=inp.rudder||inp.twist}
+ else for(const a of AX)target[a]=0}
+function renderSeat(){   // 実際に送る値(向きの反転込み)を絵と棒で見せる
+ const o={};for(const a of AX){o[a]=cur[a]*(cfg.inv[a]?-1:1);$('m_'+a).textContent=o[a].toFixed(2);
+  const w=Math.abs(o[a])*50;const i=$('b_'+a).firstChild;i.style.left=(o[a]<0?50-w:50)+'%';i.style.width=w+'%'}
+ $('seat').style.transform=`rotateX(${55-o.pitch*25}deg) rotateZ(${o.yaw*25}deg) rotateY(${o.roll*25}deg)`}
+
+$('gain').value=cfg.gain;$('gainv').textContent=cfg.gain.toFixed(2);
+$('gain').oninput=e=>{cfg.gain=+e.target.value;$('gainv').textContent=cfg.gain.toFixed(2);saveCfg()};
+for(const a of AX){$('inv_'+a).checked=cfg.inv[a];$('inv_'+a).onchange=e=>{cfg.inv[a]=e.target.checked;saveCfg()}}
+document.querySelectorAll('[data-sway]').forEach(b=>b.onclick=()=>{swayAxis=b.dataset.sway;swayT=swayAxis?3:0;if(!swayAxis)live=false});
+$('bLive').onclick=()=>{live=!live;swayT=0};
+$('bRe').onclick=()=>fetch('/reconnect').then(r=>r.json()).then(s=>st=s).catch(()=>{});
+$('bCenter').onclick=()=>H3Input.centerAll();
+$('bAuto').onclick=()=>H3Input.clear();
+$('go').onclick=startGame;
+
+// ---- ゲーム ----
+const cv=$('c'),cx=cv.getContext('2d');let W=0,H=0;
+function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight}addEventListener('resize',rs);
+function startGame(){if(phase==='play')return;phase='play';swayT=0;live=false;document.body.classList.add('play');rs();Game.start()}
+function toSetup(){phase='setup';document.body.classList.remove('play');for(const a of AX)target[a]=0}
+
+// ---- 毎フレーム ----
+let last=performance.now();
+function frame(now){const dt=Math.min(0.05,(now-last)/1000);last=now;
+ const inp=readInput();
+ if(phase==='setup'){if(swayT>0)swayT-=dt;renderSetup(inp)}
+ else{const m=Game.update(dt,inp)||{};for(const a of AX)target[a]=clamp(+m[a]||0);Game.draw(cx,W,H);
+  $('hud').textContent=(st.connected?'● H3 接続中':'● H3 未接続')+'　Esc: 設定に戻る'}
+ const f=1-Math.pow(1-0.12,dt*60);for(const a of AX)cur[a]+=(target[a]-cur[a])*f;   // 急な動きをならす
+ if(phase==='setup')renderSeat();
+ requestAnimationFrame(frame)}
+H3Input.load().then(()=>requestAnimationFrame(frame));
+</script></body></html>

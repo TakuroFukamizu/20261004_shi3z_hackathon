@@ -188,3 +188,26 @@ python3 client/test_stackchan_hub.py
 
 実機での計測（会場 Wi-Fi、2026-10-04）: コマンドの往復は中央値 12 ms、状態通知は 50 ms ごと、
 `look` は呼び出しから機体到着まで中央値 13 ms（PC 内の疑似機体での値）。
+
+## AI シナリオ（turn 2）
+
+短い方針をローカル LLM に渡し、StackChan と toio 9 台の芝居を作って同時に動かす。
+AI が選ぶのは隊形や表情などの語彙だけで、マスの座標はプログラムが計算する。
+生成結果は `scenarios/` に保存され、そのファイルだけでも再生できる。
+
+StackChan ハブ（`:8766`）と toio ハブ（`:8765`）を先に起動する。toio ハブがまだ無いときは疑似ハブで試せる。
+
+```sh
+python3 client/scenario/fake_toio_hub.py            # 疑似 toio（既定 :8765）
+python3 client/scenario/run.py "自己紹介してハートを作る"
+python3 client/scenario/run.py --generate-only "おやすみのあいさつ"
+python3 client/scenario/run.py --from scenarios/20261004-120000.json
+python3 client/scenario/run.py --dry-run "円になって回る"
+python3 client/scenario/run.py --interactive          # 空行で終了
+python3 client/scenario/test_scenario.py              # 機体も LLM も使わない
+```
+
+`--ai-url`（既定は環境変数 `AI_URL` または `http://192.168.100.143:8080/v1/chat/completions`）、
+`--model`（既定 `qwen2.5-3b`）、`--steps`（最大ステップ数、既定 6）、`--seed`、
+`--stackchan-hub` / `--toio-hub`、`--no-stackchan`、`--no-toio`。
+片方のハブが落ちていても、ある方だけで続ける。Ctrl-C で両方止める。

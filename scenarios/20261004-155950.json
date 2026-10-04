@@ -1,0 +1,71 @@
+{
+  "title": "StackChanとtoioのハートステップ",
+  "steps": [
+    {
+      "face": "happy",
+      "look": "center",
+      "body": "nod",
+      "toio_move": "heart",
+      "toio_group": "all",
+      "toio_color": "white",
+      "toio_sound": "ok",
+      "say": "こんにちは、皆様",
+      "pause": 1
+    },
+    {
+      "face": "doubt",
+      "look": "right",
+      "body": "turn_left",
+      "toio_move": "circle",
+      "toio_group": "all",
+      "toio_color": "green",
+      "toio_sound": "beep",
+      "say": "ハートに集合",
+      "pause": 1
+    },
+    {
+      "face": "neutral",
+      "look": "center",
+      "body": "none",
+      "toio_move": "home",
+      "toio_group": "all",
+      "toio_color": "red",
+      "toio_sound": "none",
+      "say": "中央へ戻る",
+      "pause": 1
+    },
+    {
+      "face": "happy",
+      "look": "left",
+      "body": "turn_right",
+      "toio_move": "scatter",
+      "toio_group": "all",
+      "toio_color": "blue",
+      "toio_sound": "beep",
+      "say": "みんなでハート形にする",
+      "pause": 1
+    },
+    {
+      "face": "sad",
+      "look": "center",
+      "body": "none",
+      "toio_move": "heart",
+      "toio_group": "all",
+      "toio_color": "white",
+      "toio_sound": "cheer",
+      "say": "完成！",
+      "pause": 2
+    },
+    {
+      "face": "neutral",
+      "look": "center",
+      "body": "nod",
+      "toio_move": "circle",
+      "toio_group": "all",
+      "toio_color": "yellow",
+      "toio_sound": "beep",
+      "say": "みんなでハッピーな時間でしたね",
+      "pause": 1
+    }
+  ]
+}

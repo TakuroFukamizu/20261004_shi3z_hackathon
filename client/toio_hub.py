@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -121,6 +122,8 @@ class Cube:
 
 
 class Hub:
+    RETRY = 2   # seconds between attempts to find cubes that are not connected
+
     def __init__(self, mat, entries):
         self.mat = mat
         self.cubes = {cid: Cube(cid, name) for cid, name in entries}
@@ -266,7 +269,11 @@ class Hub:
         while True:
             missing = [c for _, c in sorted(self.cubes.items()) if not c.connected]
             if missing:
-                found = await BleakScanner.discover(timeout=4.0, return_adv=True, service_uuids=[P.SERVICE])
+                try:
+                    found = await BleakScanner.discover(timeout=4.0, return_adv=True, service_uuids=[P.SERVICE])
+                except Exception as e:      # Bluetooth off or not permitted: keep serving, keep trying
+                    print("scan failed: %s" % e)
+                    found = {}
                 by_suffix = {suffix(adv.local_name or dev.name): dev for dev, adv in found.values()}
                 for cube in missing:
                     device = by_suffix.get(suffix(cube.name))
@@ -276,7 +283,7 @@ class Hub:
                         await self._connect(cube, device)
                     except Exception as e:
                         print("cube %d (%s): connect failed: %s" % (cube.id, cube.name, e))
-            await asyncio.sleep(2)
+            await asyncio.sleep(self.RETRY)
 
     async def shutdown(self):
         """Stop and release every cube. Called on exit, so each step is best effort."""
@@ -383,7 +390,9 @@ async def run(args):
     if not entries:
         sys.exit("no cubes in %s: run with --assign first" % args.config)
     hub = Hub(mat, entries)
-    server = serve_http(hub, asyncio.get_running_loop(), args.port)
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, asyncio.current_task().cancel)   # `kill` stops the cubes too
+    server = serve_http(hub, loop, args.port)
     print("hub on http://%s:%d/cmd, %d cubes configured. Ctrl-C to quit." % (HOST, args.port, len(entries)))
     try:
         await hub.keep_connected()
@@ -397,9 +406,10 @@ def main(argv=None):
     p.add_argument("--assign", action="store_true", help="give each cube a number and save the config")
     p.add_argument("--config", default=CONFIG_PATH)
     p.add_argument("--port", type=int, default=PORT)
+    sys.stdout.reconfigure(line_buffering=True)     # keep the log live when redirected to a file
     try:
         asyncio.run(run(p.parse_args(argv)))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     return 0
 

@@ -4,7 +4,9 @@ import asyncio
 import json
 import os
 import struct
+import sys
 import tempfile
+import types
 import unittest
 import urllib.error
 import urllib.request
@@ -226,6 +228,87 @@ class HubCase(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(res["ok"], req)
             self.assertTrue(res["error"], req)
         self.assertEqual(self.all_writes(), [])
+
+
+class FakeBleClient(FakeClient):
+    """Stands in for bleak.BleakClient: a cube sitting on cell (4, 3) with 80% battery."""
+    made = []
+
+    def __init__(self, device, disconnected_callback=None):
+        super().__init__()
+        self.device, self.lost = device, disconnected_callback
+        FakeBleClient.made.append(self)
+
+    async def connect(self):
+        pass
+
+    async def disconnect(self):
+        pass
+
+    async def start_notify(self, char, callback):
+        pass
+
+    async def read_gatt_char(self, char):
+        return bytes([80]) if char == P.BATTERY else struct.pack("<B6H", 0x01, 250, 250, 0, 250, 250, 0)
+
+
+class ConnectionTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.scans = []     # what each scan returns; an exception is raised instead
+        case = self
+
+        class Scanner:
+            @staticmethod
+            async def discover(timeout, return_adv, service_uuids):
+                result = case.scans.pop(0) if case.scans else {}
+                if isinstance(result, Exception):
+                    raise result
+                return result
+
+        FakeBleClient.made = []
+        sys.modules["bleak"] = types.SimpleNamespace(BleakScanner=Scanner, BleakClient=FakeBleClient)
+        self.addCleanup(sys.modules.pop, "bleak")
+        self.addCleanup(setattr, Hub, "RETRY", Hub.RETRY)
+        Hub.RETRY = 0.01
+        self.hub = Hub(Mat(**GRID), [(1, "toio-a1B")])
+        task = asyncio.ensure_future(self.hub.keep_connected())
+        self.addCleanup(task.cancel)
+
+    def seen(self, local_name):
+        return {"addr": ("device", types.SimpleNamespace(local_name=local_name))}
+
+    async def until(self, condition):
+        for _ in range(200):
+            if condition():
+                return
+            await asyncio.sleep(0.01)
+        self.fail("condition not reached")
+
+    async def test_connects_by_name_suffix_and_reads_state(self):
+        self.scans += [self.seen("toio-zzz"), self.seen("toio Core Cube-a1B")]
+        cube = self.hub.cubes[1]
+        await self.until(lambda: cube.connected)
+        self.assertEqual((cube.battery, cube.on_mat, cube.x, cube.y), (80, True, 250, 250))
+
+    async def test_scan_failure_does_not_kill_the_hub(self):
+        self.scans += [OSError("Bluetooth is turned off"), self.seen("toio-a1B")]
+        await self.until(lambda: self.hub.cubes[1].connected)
+
+    async def test_reconnects_after_a_drop(self):
+        self.scans += [self.seen("toio-a1B")]
+        cube = self.hub.cubes[1]
+        await self.until(lambda: cube.connected)
+        FakeBleClient.made[-1].lost(FakeBleClient.made[-1])
+        self.assertFalse(cube.connected)
+        self.scans += [self.seen("toio-a1B")]
+        await self.until(lambda: cube.connected)
+        self.assertEqual(len(FakeBleClient.made), 2)
+
+    async def test_shutdown_stops_and_releases_cubes(self):
+        self.scans += [self.seen("toio-a1B")]
+        await self.until(lambda: self.hub.cubes[1].connected)
+        await self.hub.shutdown()
+        self.assertEqual(FakeBleClient.made[-1].writes, [(P.MOTOR, P.STOP), (P.LIGHT, P.LED_OFF)])
 
 
 class ConfigTest(unittest.TestCase):

@@ -1,8 +1,8 @@
 """Pre-programmed dance runner: plays a song and sends beat-timed commands to the robot.
 
-Fallback for when the live music analysis is not ready. Each song script defines its
-BPM and an 8-count choreography (the same move names as stackchan-dance-controller.html);
-this module repeats it over the length of the WAV file, getting stronger every 8 counts.
+Fallback for when the live music analysis is not ready. Each song script has its own
+choreography (a build(beats) function returning a Score); this module times it against the
+WAV file and sends it.
 
 Commands go to the Core2 over HTTP (head/face directly, drive/grip forwarded to the rover).
 Wheel moves are paired so the robot ends up where it started. Ctrl-C always stops the
@@ -23,7 +23,6 @@ import time
 import wave
 from dataclasses import dataclass, field
 
-K_BY_LOOP = [0.7, 0.85, 1.0, 1.0]  # intensity of each 8-count round
 STALE_S = 0.35  # drop head/drive commands that are this late (they would look like jitter)
 
 
@@ -41,8 +40,6 @@ class Score:
     def __init__(self, bpm):
         self.bpm = bpm
         self.beat = 60.0 / bpm
-        self.k = 1.0       # intensity of the current 8-count round
-        self.loop = 0      # which 8-count round we are in
         self.events = []
         self._seq = 0
         # head spring speed: slower songs get softer moves
@@ -63,12 +60,11 @@ class Score:
         """text="" clears the speech balloon, None leaves it as is."""
         self._add(c, "face", expression=expression, text=text)
 
-    def drive(self, c, x=0, y=0, rot=0, dur=0.5, scale=True):
+    def drive(self, c, x=0, y=0, rot=0, dur=0.5):
         """x: strafe right(+), y: forward(+), rot: turn, -100..100. dur in beats.
-        scale=False ignores the round intensity (use for moves that must cancel exactly)."""
-        k = self.k if scale else 1.0
+        Pair every move with its opposite so the robot ends where it started."""
         ms = int(max(60, min(5000, dur * self.beat * 1000)))
-        self._add(c, "drive", x=int(x * k), y=int(y * k), rot=int(rot * k), ms=ms)
+        self._add(c, "drive", x=int(x), y=int(y), rot=int(rot), ms=ms)
 
     def grip(self, c, percent):
         """0 = open, 100 = closed."""
@@ -76,18 +72,6 @@ class Score:
 
     def mark(self, c, text):
         self._add(c, "mark", text=text)
-
-
-def build_score(bpm, beats, moves):
-    s = Score(bpm)
-    for beat in range(beats):
-        s.loop = beat // 8
-        s.k = K_BY_LOOP[min(s.loop, len(K_BY_LOOP) - 1)]
-        name, fn = moves[beat % 8]
-        s.mark(beat, f"{beat + 1:2d}/{beats}  {name}")
-        fn(s, float(beat))
-    s.events.sort()
-    return s
 
 
 def net_motion(score):
@@ -232,7 +216,7 @@ def print_timeline(score, power):
 
 # --------------------------------------------------------------------------- main
 
-def main(title, wav_name, bpm, moves):
+def main(title, wav_name, bpm, build):
     ap = argparse.ArgumentParser(description=f"{title}: dance to {wav_name} ({bpm} BPM)")
     ap.add_argument("--host", default=os.environ.get("ROBOT_HOST") or "stackchan.local")
     ap.add_argument("--wav", help="path to the song (default: res/%s)" % wav_name)
@@ -259,14 +243,15 @@ def main(title, wav_name, bpm, moves):
     beats = round(dur * bpm / 60)
     if abs(beats * 60 / bpm - dur) > 0.25:
         print(f"warning: {dur:.2f}s is not a whole number of beats at {bpm} BPM; using {beats} beats")
-    score = build_score(bpm, beats, moves)
+    score = build(beats)
+    score.events.sort()
     skip = set()
     if a.no_drive: skip.add("drive")
     if a.no_grip: skip.add("grip")
     if a.no_head: skip.add("head")
     events = [e for e in score.events if e.kind not in skip]
 
-    print(f"{title}: {bpm} BPM, {dur:.2f}s, {beats} beats, {beats // 8} rounds of 8 counts")
+    print(f"{title}: {bpm} BPM, {dur:.2f}s, {beats} beats")
     if a.dry_run:
         print_timeline(score, a.power)
         return 0

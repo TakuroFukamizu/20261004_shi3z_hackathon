@@ -1,12 +1,17 @@
 """Tests for the hub's command handling. No BLE: cubes get a fake client.
 Run: cd client && python3 -m unittest test_toio_hub -v"""
 import asyncio
+import json
+import os
 import struct
+import tempfile
 import unittest
+import urllib.error
+import urllib.request
 
 import toio_protocol as P
 from toio_field import Mat
-from toio_hub import Cube, Hub
+from toio_hub import Cube, Hub, load_config, serve_http, suffix
 
 GRID = dict(x_min=98, y_min=142, x_max=402, y_max=358, cols=7, rows=5)
 
@@ -221,6 +226,79 @@ class HubCase(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(res["ok"], req)
             self.assertTrue(res["error"], req)
         self.assertEqual(self.all_writes(), [])
+
+
+class ConfigTest(unittest.TestCase):
+    def load(self, raw):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            with open(path, "w") as f:
+                json.dump(raw, f)
+            return load_config(path)
+
+    def test_load_config(self):
+        mat, entries = self.load({"mat": GRID, "cubes": [{"name": "toio-a1B", "id": 2}]})
+        self.assertEqual(mat.cell_center(4, 3), (250, 250))
+        self.assertEqual(entries, [(2, "toio-a1B")])
+
+    def test_load_config_without_cubes(self):
+        self.assertEqual(self.load({"mat": GRID})[1], [])
+
+    def test_load_config_rejects_duplicate_ids(self):
+        with self.assertRaises(ValueError):
+            self.load({"mat": GRID, "cubes": [{"name": "toio-a1B", "id": 1}, {"name": "toio-c2D", "id": 1}]})
+
+    def test_load_config_rejects_id_out_of_range(self):
+        with self.assertRaises(ValueError):
+            self.load({"mat": GRID, "cubes": [{"name": "toio-a1B", "id": 10}]})
+
+    def test_shipped_config_is_valid(self):
+        mat, entries = load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "toio_config.json"))
+        self.assertEqual((mat.x_min, mat.y_min, mat.x_max, mat.y_max, mat.cols, mat.rows), (98, 142, 402, 358, 7, 5))
+
+    def test_suffix(self):
+        self.assertEqual(suffix("toio-a1B"), "a1B")
+        self.assertEqual(suffix("toio Core Cube-a1B"), "a1B")
+        self.assertEqual(suffix(None), "")
+
+
+class HttpTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.loop = asyncio.get_running_loop()
+        server = serve_http(Hub(Mat(**GRID), [(1, "toio-a1B")]), self.loop, 0)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.assertEqual(server.server_address[0], "127.0.0.1")
+        self.url = "http://127.0.0.1:%d" % server.server_address[1]
+
+    async def post(self, path, body):
+        def call():
+            req = urllib.request.Request(self.url + path, data=body)
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                with e:
+                    return e.code, json.loads(e.read())
+        return await self.loop.run_in_executor(None, call)
+
+    async def test_http_status(self):
+        code, res = await self.post("/cmd", b'{"cmd": "status"}')
+        self.assertEqual(code, 200)
+        self.assertEqual(res["cubes"][0]["name"], "toio-a1B")
+
+    async def test_http_command_error_is_400(self):
+        code, res = await self.post("/cmd", b'{"cmd": "fly"}')
+        self.assertEqual((code, res["ok"]), (400, False))
+
+    async def test_http_rejects_invalid_json(self):
+        for body in (b"{not json", b"\xff\xfe", b""):
+            code, res = await self.post("/cmd", body)
+            self.assertEqual((code, res), (400, {"ok": False, "error": "invalid JSON"}))
+
+    async def test_http_unknown_path(self):
+        code, res = await self.post("/other", b"{}")
+        self.assertEqual((code, res["ok"]), (404, False))
 
 
 if __name__ == "__main__":

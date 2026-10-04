@@ -10,10 +10,19 @@
 
 Talk to it with client/toio.py. Ctrl-C stops every cube and quits.
 """
+import argparse
 import asyncio
+import json
+import os
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import toio_protocol as P
-from toio_field import check_targets
+from toio_field import Mat, check_targets
+
+HOST, PORT = "127.0.0.1", 8765
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "toio_config.json")
 
 
 class CmdError(Exception):
@@ -231,3 +240,169 @@ class Hub:
         cubes = self._select(req.get("id", "all"))
         await asyncio.gather(*(c.stop() for c in cubes))
         return {"ok": True, "ids": [c.id for c in cubes]}
+
+    async def _connect(self, cube, device):
+        from bleak import BleakClient
+
+        def lost(_client):
+            print("cube %d (%s) disconnected" % (cube.id, cube.name))
+            cube.on_disconnect()
+
+        client = BleakClient(device, disconnected_callback=lost)
+        await client.connect()
+        cube.client = client
+        await client.start_notify(P.ID_INFO, cube.on_id)
+        await client.start_notify(P.MOTOR, cube.on_motor)
+        await client.start_notify(P.BATTERY, cube.on_battery)
+        cube.on_id(None, await client.read_gatt_char(P.ID_INFO))
+        cube.on_battery(None, await client.read_gatt_char(P.BATTERY))
+        cube.connected = True
+        print("cube %d (%s) connected, battery %s%%" % (cube.id, cube.name, cube.battery))
+
+    async def keep_connected(self):
+        """Connect every configured cube, one at a time, and reconnect the ones that drop. Never returns."""
+        from bleak import BleakScanner
+
+        while True:
+            missing = [c for _, c in sorted(self.cubes.items()) if not c.connected]
+            if missing:
+                found = await BleakScanner.discover(timeout=4.0, return_adv=True, service_uuids=[P.SERVICE])
+                by_suffix = {suffix(adv.local_name or dev.name): dev for dev, adv in found.values()}
+                for cube in missing:
+                    device = by_suffix.get(suffix(cube.name))
+                    if device is None:
+                        continue
+                    try:
+                        await self._connect(cube, device)
+                    except Exception as e:
+                        print("cube %d (%s): connect failed: %s" % (cube.id, cube.name, e))
+            await asyncio.sleep(2)
+
+    async def shutdown(self):
+        """Stop and release every cube. Called on exit, so each step is best effort."""
+        for cube in self.cubes.values():
+            if not cube.connected:
+                continue
+            try:
+                await cube.stop()
+                await cube.write(P.LIGHT, P.LED_OFF)
+                await cube.client.disconnect()
+            except Exception:
+                pass
+
+
+def suffix(name):
+    """The 3 characters that identify a cube: "toio-a1B" and "toio Core Cube-a1B" both give "a1B"."""
+    return (name or "").rsplit("-", 1)[-1]
+
+
+def load_config(path):
+    with open(path) as f:
+        raw = json.load(f)
+    mat = Mat(**raw["mat"])
+    entries = [(int(c["id"]), str(c["name"])) for c in raw.get("cubes", [])]
+    ids = [cid for cid, _ in entries]
+    if len(set(ids)) != len(ids) or any(not 1 <= cid <= 9 for cid in ids):
+        raise ValueError("cube ids in %s must be unique and 1..9" % path)
+    return mat, entries
+
+
+def serve_http(hub, loop, port):
+    """Serve POST /cmd on localhost from a background thread; commands run on `loop`."""
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path != "/cmd":
+                return self._reply(404, {"ok": False, "error": "not found"})
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length > 65536:
+                    raise ValueError("too large")
+                req = json.loads(self.rfile.read(length))
+            except ValueError:
+                return self._reply(400, {"ok": False, "error": "invalid JSON"})
+            res = asyncio.run_coroutine_threadsafe(hub.handle(req), loop).result()
+            self._reply(200 if res.get("ok") else 400, res)
+
+        def _reply(self, code, body):
+            data = json.dumps(body, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer((HOST, port), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+async def assign(path):
+    """Light each cube found, ask which number it is, and save the answers to the config."""
+    from bleak import BleakClient, BleakScanner
+
+    with open(path) as f:
+        raw = json.load(f)
+    print("scanning 6 s ... (turn every cube on)")
+    found = await BleakScanner.discover(timeout=6.0, return_adv=True, service_uuids=[P.SERVICE])
+    named = sorted(((adv.local_name or dev.name or "?", dev) for dev, adv in found.values()), key=lambda t: t[0])
+    print("found %d cubes" % len(named))
+    loop = asyncio.get_running_loop()
+    cubes, used = [], set()
+    for name, dev in named:
+        try:
+            async with BleakClient(dev) as client:
+                await client.write_gatt_char(P.LIGHT, P.led(255, 255, 255))
+                await client.write_gatt_char(P.SOUND, P.sound(6))
+                prompt = "%s is lit. number 1-9 (blank to skip): " % name
+                answer = (await loop.run_in_executor(None, input, prompt)).strip()
+                await client.write_gatt_char(P.LIGHT, P.LED_OFF)
+        except Exception as e:
+            print("  %s: %s" % (name, e))
+            continue
+        if not answer:
+            continue
+        if not answer.isdigit() or not 1 <= int(answer) <= 9 or int(answer) in used:
+            print("  skipped: need an unused number 1-9")
+            continue
+        used.add(int(answer))
+        cubes.append({"name": name, "id": int(answer)})
+    raw["cubes"] = sorted(cubes, key=lambda c: c["id"])
+    with open(path, "w") as f:
+        json.dump(raw, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    print("saved %d cubes to %s" % (len(cubes), path))
+
+
+async def run(args):
+    if args.assign:
+        return await assign(args.config)
+    mat, entries = load_config(args.config)
+    if not entries:
+        sys.exit("no cubes in %s: run with --assign first" % args.config)
+    hub = Hub(mat, entries)
+    server = serve_http(hub, asyncio.get_running_loop(), args.port)
+    print("hub on http://%s:%d/cmd, %d cubes configured. Ctrl-C to quit." % (HOST, args.port, len(entries)))
+    try:
+        await hub.keep_connected()
+    finally:
+        server.shutdown()
+        await hub.shutdown()
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--assign", action="store_true", help="give each cube a number and save the config")
+    p.add_argument("--config", default=CONFIG_PATH)
+    p.add_argument("--port", type=int, default=PORT)
+    try:
+        asyncio.run(run(p.parse_args(argv)))
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

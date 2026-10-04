@@ -29,12 +29,12 @@ from robot import Robot
 
 # key name (as printed by --learn) -> list of (Robot method, keyword arguments)
 BINDINGS = {
-    "page_down": [("drive", {"y": 50, "ms": 800})],     # slide forward button
-    "page_up":   [("drive", {"y": -50, "ms": 800})],    # slide back button
+    "right":     [("drive", {"y": 50, "ms": 800})],     # PR7-HY slide forward button
+    "left":      [("drive", {"y": -50, "ms": 800})],    # PR7-HY slide back button
     "up":        [("drive", {"y": 50, "ms": 800})],
     "down":      [("drive", {"y": -50, "ms": 800})],
-    "right":     [("drive", {"rot": 50, "ms": 500})],
-    "left":      [("drive", {"rot": -50, "ms": 500})],
+    "d":         [("drive", {"rot": 50, "ms": 500})],
+    "a":         [("drive", {"rot": -50, "ms": 500})],
     "f5":        [("face", {"expression": "happy"}), ("say", {"text": "こんにちは"})],
     "b":         [("face", {"expression": "sleepy"})],  # blackout button
     ".":         [("face", {"expression": "sleepy"})],
@@ -120,7 +120,7 @@ def read_terminal(on_key):
 
 def read_global(on_key, learn):
     try:
-        from pynput import keyboard
+        from pynput import keyboard, mouse
     except ImportError:
         sys.exit("--global needs pynput: run with `uv run client/presenter.py --global`")
     held = set()
@@ -138,6 +138,11 @@ def read_global(on_key, learn):
         vk = key.value.vk if isinstance(key, keyboard.Key) else key.vk
         on_key(f"{n}  (vk={vk})" if learn else n)
 
+    def on_click(x, y, button, pressed):
+        if pressed:
+            on_key(f"mouse_{button.name}")
+
+    mouse.Listener(on_click=on_click).start()
     with keyboard.Listener(on_press=on_press, on_release=lambda k: held.discard(name(k))) as listener:
         listener.join()
 

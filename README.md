@@ -126,7 +126,7 @@ c++ -std=c++17 -Ifirmware/include firmware/test_host/test_mecanum.cpp -o /tmp/t 
 export ROBOT_HOST=192.168.100.29
 python3 client/dance/dance_03_boss_battle.py --dry-run     # 送る内容を表示するだけ
 python3 client/dance/dance_03_boss_battle.py               # Mac で曲を流しながら踊る
-python3 client/dance/dance_03_boss_battle.py --no-audio    # 曲は会場の音響で流す。開始と同時に Enter 代わりに起動
+python3 client/dance/dance_03_boss_battle.py --no-audio    # 曲は会場の音響で流す。音響と同時にこちらを起動（--wait で Enter 待ち）
 python3 client/dance/dance_03_boss_battle.py --robot-audio # 曲をロボットのスピーカーで鳴らす
 ```
 

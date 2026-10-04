@@ -121,17 +121,26 @@ AI / スクリプト ──HTTP (127.0.0.1:8765)──▶ toio ハブ（常駐�
 
 ### 初回の準備
 
-1. 全台の電源を入れてマットに載せ、接続を確かめる。初回は macOS が Bluetooth の利用許可を求める。
+近くに他人の toio があっても触らないよう、名前（`toio-XXX` の末尾 3 文字）を指定した台にしか接続しない。
+
+1. 自分のキューブの名前を調べる。接続はせず、電波の強い順（近い順の目安）に一覧を出す。
+   初回は macOS が Bluetooth の利用許可を求める。
 
    ```sh
-   uv run client/toio_spike.py --minutes 1 --move
+   uv run client/toio_hub.py --scan
    ```
 
-   最後に `PASS` と出れば、この Mac で全台を同時に扱える。
-2. 番号を割り当てる。1 台ずつ白く光るので、その台に付ける番号（1〜9）を入力し、番号シールを貼る。
+2. 全台の電源を入れてマットに載せ、接続を確かめる。
 
    ```sh
-   uv run client/toio_hub.py --assign
+   uv run client/toio_spike.py --names a1B,c2D --minutes 1 --move
+   ```
+
+   最後に `PASS` と出れば、この Mac で指定した全台を同時に扱える。
+3. 番号を割り当てる。1 台ずつ白く光るので、その台に付ける番号（1〜9）を入力し、番号シールを貼る。
+
+   ```sh
+   uv run client/toio_hub.py --assign --names a1B,c2D
    ```
 
 ### 使い方

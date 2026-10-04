@@ -5,7 +5,8 @@
 # ///
 """Hub that keeps BLE connections to the toio cubes and takes JSON commands over HTTP.
 
-  uv run client/toio_hub.py --assign     light each cube in turn and give it a number 1-9
+  uv run client/toio_hub.py --scan                       list the cubes in range (name, signal); connects to nothing
+  uv run client/toio_hub.py --assign --names a1B,c2D     light each named cube in turn and give it a number 1-9
   uv run client/toio_hub.py              run the hub (127.0.0.1:8765, POST /cmd)
 
 Talk to it with client/toio.py. Ctrl-C stops every cube and quits.
@@ -362,16 +363,40 @@ def serve_http(hub, loop, port):
     return server
 
 
-async def assign(path):
-    """Light each cube found, ask which number it is, and save the answers to the config."""
-    from bleak import BleakClient, BleakScanner
+def choose(found, names):
+    """found: [(name, rssi, device)]. Keep only the cubes whose 3-character id is in `names`.
+    Other people's cubes may be in range, so nothing is ever connected to unless it is named."""
+    want = {suffix(n) for n in names}
+    return [f for f in found if suffix(f[0]) in want]
+
+
+async def scan(timeout=6.0):
+    """Cubes advertising nearby as [(name, rssi, device)], strongest signal (usually the nearest) first."""
+    from bleak import BleakScanner
+
+    found = await BleakScanner.discover(timeout=timeout, return_adv=True, service_uuids=[P.SERVICE])
+    return sorted(((adv.local_name or dev.name or "?", adv.rssi, dev) for dev, adv in found.values()),
+                  key=lambda f: -f[1])
+
+
+def print_scan(found):
+    print("found %d cubes (strongest signal first):" % len(found))
+    for name, rssi, _ in found:
+        print("  %-22s %4d dBm" % (name, rssi))
+
+
+async def assign(path, names):
+    """Light each named cube, ask which number it is, and save the answers to the config."""
+    from bleak import BleakClient
 
     with open(path) as f:
         raw = json.load(f)
     print("scanning 6 s ... (turn every cube on)")
-    found = await BleakScanner.discover(timeout=6.0, return_adv=True, service_uuids=[P.SERVICE])
-    named = sorted(((adv.local_name or dev.name or "?", dev) for dev, adv in found.values()), key=lambda t: t[0])
-    print("found %d cubes" % len(named))
+    found = await scan()
+    print_scan(found)
+    named = [(name, dev) for name, _, dev in choose(found, names)]
+    if not named:
+        sys.exit("none of the named cubes were found; pass your own cubes with --names a1B,c2D,...")
     loop = asyncio.get_running_loop()
     cubes, used = [], set()
     for name, dev in named:
@@ -400,8 +425,13 @@ async def assign(path):
 
 
 async def run(args):
+    names = [n for n in args.names.split(",") if n]
+    if args.scan:
+        return print_scan(await scan())
     if args.assign:
-        return await assign(args.config)
+        if not names:
+            sys.exit("--assign needs --names with your own cubes (see --scan), e.g. --names a1B,c2D")
+        return await assign(args.config, names)
     mat, entries = load_config(args.config)
     if not entries:
         sys.exit("no cubes in %s: run with --assign first" % args.config)
@@ -419,7 +449,9 @@ async def run(args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--assign", action="store_true", help="give each cube a number and save the config")
+    p.add_argument("--scan", action="store_true", help="list cubes in range without connecting")
+    p.add_argument("--assign", action="store_true", help="give each named cube a number and save the config")
+    p.add_argument("--names", default="", help="comma-separated cube ids for --assign, e.g. a1B,c2D")
     p.add_argument("--config", default=CONFIG_PATH)
     p.add_argument("--port", type=int, default=PORT)
     sys.stdout.reconfigure(line_buffering=True)     # keep the log live when redirected to a file

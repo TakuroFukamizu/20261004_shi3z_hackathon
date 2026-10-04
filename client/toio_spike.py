@@ -5,11 +5,12 @@
 # ///
 """Checks whether this Mac can hold N toio cubes at once.
 
-  uv run client/toio_spike.py                    connect to every cube found, soak for 10 minutes
-  uv run client/toio_spike.py --minutes 1        shorter soak
-  uv run client/toio_spike.py --move             also send one cube to the mat centre (250, 250)
+  uv run client/toio_spike.py --names a1B,c2D                connect to these cubes, soak for 10 minutes
+  uv run client/toio_spike.py --names a1B,c2D --minutes 1    shorter soak
+  uv run client/toio_spike.py --names a1B,c2D --move         also send one cube to the mat centre (250, 250)
 
-Turn all cubes on and put them on the mat first. PASS means: --expect cubes connected,
+Only the named cubes are touched (find the names with `uv run client/toio_hub.py --scan`).
+Turn them on and put them on the mat first. PASS means: every named cube connected,
 no disconnects, median config round trip under 100 ms.
 """
 import argparse
@@ -18,9 +19,10 @@ import statistics
 import sys
 import time
 
-from bleak import BleakClient, BleakScanner
+from bleak import BleakClient
 
 import toio_protocol as P
+from toio_hub import choose, print_scan, scan
 
 COLORS = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
 
@@ -77,9 +79,11 @@ async def ping(c):
 
 async def run(a):
     print("scanning 6 s ...")
-    found = await BleakScanner.discover(timeout=6.0, return_adv=True, service_uuids=[P.SERVICE])
-    named = sorted(((adv.local_name or dev.name or "?", dev) for dev, adv in found.values()), key=lambda t: t[0])
-    print("found %d cubes" % len(named))
+    found = await scan()
+    print_scan(found)
+    names = [n for n in a.names.split(",") if n]
+    named = [(name, dev) for name, _, dev in choose(found, names)]
+    expect = len(names)
     cubes = []
     for name, dev in named:
         try:
@@ -129,16 +133,16 @@ async def run(a):
                     await c["client"].disconnect()
             except Exception:
                 pass
-        ok = (len(cubes) >= a.expect and all(c["drops"] == 0 for c in cubes)
+        ok = (len(cubes) >= expect and all(c["drops"] == 0 for c in cubes)
               and bool(medians) and all(m < 100 for m in medians))
-        print("\n%s: %d of %d cubes connected" % ("PASS" if ok else "FAIL", len(cubes), a.expect))
+        print("\n%s: %d of %d cubes connected" % ("PASS" if ok else "FAIL", len(cubes), expect))
     return 0 if ok else 1
 
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--minutes", type=float, default=10)
-    p.add_argument("--expect", type=int, default=9, help="number of cubes that must connect")
+    p.add_argument("--names", required=True, help="comma-separated ids of your own cubes, e.g. a1B,c2D")
     p.add_argument("--move", action="store_true", help="send the first cube on the mat to (250, 250)")
     try:
         return asyncio.run(run(p.parse_args(argv)))

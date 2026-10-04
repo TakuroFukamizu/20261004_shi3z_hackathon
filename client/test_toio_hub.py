@@ -13,7 +13,7 @@ import urllib.request
 
 import toio_protocol as P
 from toio_field import Mat
-from toio_hub import Cube, Hub, load_config, serve_http, suffix
+from toio_hub import Cube, Hub, choose, load_config, serve_http, suffix
 
 GRID = dict(x_min=98, y_min=142, x_max=402, y_max=358, cols=7, rows=5)
 
@@ -386,6 +386,12 @@ class ConfigTest(unittest.TestCase):
     def test_shipped_config_is_valid(self):
         mat, entries = load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "toio_config.json"))
         self.assertEqual((mat.x_min, mat.y_min, mat.x_max, mat.y_max, mat.cols, mat.rows), (98, 142, 402, 358, 7, 5))
+
+    def test_choose_keeps_only_named_cubes(self):
+        found = [("toio-f2m", -40, "d1"), ("toio Core Cube-a1B", -60, "d2"), ("toio-c2D", -70, "d3")]
+        self.assertEqual(choose(found, ["f2m", "toio-a1B"]), found[:2])
+        self.assertEqual(choose(found, []), [])            # nothing named, nothing touched
+        self.assertEqual(choose(found, ["zzz"]), [])
 
     def test_suffix(self):
         self.assertEqual(suffix("toio-a1B"), "a1B")

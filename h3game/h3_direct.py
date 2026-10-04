@@ -61,13 +61,15 @@ class H3:
     # --- 高レベル ---
     def move(self, pitch=0.0, roll=0.0, yaw=0.0):
         """
-        pitch: +で前が下がる方向(仮)  roll: +で右が下がる(仮)  yaw: 後ろの横振り
-        いずれも -1.0..1.0。実機で向きが逆なら符号を変える。
-        H3 の並び: モーター1=左前, 2=右前, 3=後ろ(横振り) を想定。
+        pitch: 前後の傾き  roll: 左右の傾き  yaw: 後ろの横振り
+        いずれも -1.0..1.0。実機で向きが逆なら画面の反転チェックか符号を変える。
+        実機確認: モーター1,2 の同方向(和)=左右の傾き、逆方向(差)=前後の傾き。
+        (以前は逆に想定していて、左右と前後が入れ替わっていた)
+        モーター3=後ろ(横振り)。
         """
         g = self.gain * 511
-        m1 = CENTER + g * ( pitch + roll)
-        m2 = CENTER + g * ( pitch - roll)
+        m1 = CENTER + g * ( roll + pitch)
+        m2 = CENTER + g * ( roll - pitch)
         m3 = CENTER + g * yaw
         self.set_motors(m1, m2, m3)
 

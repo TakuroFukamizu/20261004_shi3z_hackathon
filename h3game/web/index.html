@@ -67,7 +67,10 @@
 <div id="play"><canvas id="c"></canvas><div id="hud"></div></div>
 
 <script src="input.js"></script>
+<script src="mic.js"></script>
 <script src="game.js"></script>
+<script src="scene1_gate.js"></script>
+<script src="scene2_status.js"></script>
 <script>
 // ===== 土台: 入力をまとめる → (確認画面 or ゲーム) → 席へ送る =====
 const OWNER=(typeof __OWNER__==='undefined')?1:__OWNER__;   // bridge が番号に置き換える。-1 は「見るだけ」
@@ -94,7 +97,8 @@ function readInput(){const v=H3Input.values();const b1=H3Input.buttons('stick1')
  return {x:clamp(v.stick1_x+k('ArrowRight','KeyD')-k('ArrowLeft','KeyA')),
   y:clamp(v.stick1_y+k('ArrowDown','KeyS')-k('ArrowUp','KeyW')),   // 奥へ倒す = マイナス
   twist:v.stick1_twist,throttle:v.stick1_throttle,
-  x2:v.stick2_x,y2:v.stick2_y,twist2:v.stick2_twist,throttle2:v.stick2_throttle,
+  x2:v.stick2_x,y2:clamp(v.stick2_y+k('ArrowDown','KeyS')-k('ArrowUp','KeyW')),   // キーボードの前後は両方のスティックに効く
+  twist2:v.stick2_twist,throttle2:v.stick2_throttle,
   rudder:clamp(v.rudder+k('KeyE')-k('KeyQ')),brakeL:v.brake_l,brakeR:v.brake_r,
   fire:!!(b1[0]||keys.Space),fire2:!!b2[0],buttons1:b1,buttons2:b2,raw:v}}
 
@@ -125,7 +129,10 @@ function renderSetup(inp){const v=inp.raw;
    <div class="xy"><b style="left:${50+inp.x*45}%;top:${50+inp.y*45}%;background:${inp.fire?'#fc6':'#4c9'}"></b></div>
    <div class="lbl"><span>左右 ${inp.x.toFixed(2)}</span><span>前後 ${inp.y.toFixed(2)}</span></div>
    <div class="lbl"><span>ペダル</span><span>${inp.rudder.toFixed(2)}</span></div>${bar(inp.rudder)}
-   <div class="lbl"><span>トリガー</span><span>${inp.fire?'押している':'-'}</span></div></div>`;
+   <div class="lbl"><span>トリガー</span><span>${inp.fire?'押している':'-'}</span></div></div>`
+  +`<div class="card"><h3><span class="${Mic.ok()?'ok':'ng'}">●</span> マイク</h3><div class="name">${Mic.ok()?Mic.label():(Mic.error()||'許可を待っています')}</div>
+   ${Mic.ok()?`<div class="lbl" style="margin-top:14px"><span>声の大きさ</span><span>${Math.round(Mic.level()*100)}</span></div>${bar(Mic.level(),1)}<div class="sub">「あー」と言って棒が動けば OK。動かなければ画面を一度クリック</div>`
+    :'<div class="sub" style="margin-top:10px">ブラウザのマイクの許可を「許可」にしてください</div>'}</div>`;
  const have=DEVS.filter(d=>H3Input.padFor(d.dev)).length;
  $('src').textContent=H3Input.pads().length?`読み取り: ${H3Input.source()==='mac'?'Mac 側(bridge)':'ブラウザ'}`:'';
  const seat=STANDALONE?'<span class="wait">ファイルとして開いているので席は動きません。</span>':st.down?'<span class="ng">bridge が止まっています(start.command を起動)。</span>':
@@ -157,7 +164,7 @@ $('go').onclick=startGame;
 // ---- ゲーム ----
 const cv=$('c'),cx=cv.getContext('2d');let W=0,H=0;
 function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight}addEventListener('resize',rs);
-function startGame(){if(phase==='play')return;phase='play';swayT=0;live=false;document.body.classList.add('play');rs();Game.start()}
+function startGame(){if(phase==='play')return;Mic.resume();phase='play';swayT=0;live=false;document.body.classList.add('play');rs();Game.start()}
 function toSetup(){phase='setup';document.body.classList.remove('play');for(const a of AX)target[a]=0}
 
 // ---- 毎フレーム ----
@@ -166,9 +173,10 @@ function frame(now){const dt=Math.min(0.05,(now-last)/1000);last=now;
  const inp=readInput();
  if(phase==='setup'){if(swayT>0)swayT-=dt;renderSetup(inp)}
  else{const m=Game.update(dt,inp)||{};for(const a of AX)target[a]=clamp(+m[a]||0);Game.draw(cx,W,H);
-  $('hud').textContent=(st.connected?'● H3 接続中':'● H3 未接続')+'　Esc: 設定に戻る'}
+  $('hud').textContent=(st.connected?'● H3 接続中':'● H3 未接続')+(Mic.ok()?'　● マイク':'　× マイク')+'　Esc: 設定に戻る'}
  const f=1-Math.pow(1-0.12,dt*60);for(const a of AX)cur[a]+=(target[a]-cur[a])*f;   // 急な動きをならす
  if(phase==='setup')renderSeat();
  requestAnimationFrame(frame)}
+Mic.init();addEventListener('pointerdown',()=>Mic.resume());
 H3Input.load().then(()=>requestAnimationFrame(frame));
 </script></body></html>

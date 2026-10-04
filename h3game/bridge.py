@@ -33,7 +33,7 @@ def joy_thread():
         pads["list"] = []
         time.sleep(2)
 
-def gemini(prompt, want_json=False, image_b64=None, timeout=25):
+def gemini(prompt, want_json=False, image_b64=None, timeout=25, audio_b64=None):
     """Gemini に聞く(ゲームの仕掛け人など)。キーは ~/.gemini_env の GEMINI_API_KEY。失敗したら "" を返す。"""
     import urllib.request, re
     key = os.environ.get("GEMINI_API_KEY", "")
@@ -46,6 +46,7 @@ def gemini(prompt, want_json=False, image_b64=None, timeout=25):
     if not key: return ""
     parts = [{"text": prompt}]
     if image_b64: parts.append({"inline_data": {"mime_type": "image/jpeg", "data": image_b64}})
+    if audio_b64: parts.append({"inline_data": {"mime_type": "audio/wav", "data": audio_b64}})   # マイクの録音(WAV)
     body = {"contents": [{"parts": parts}],
             "generationConfig": {"temperature": 1.0, "maxOutputTokens": 4096,
                                  "thinkingConfig": {"thinkingBudget": 0}}}   # 考える枠を切って速く・切れずに答えさせる
@@ -203,7 +204,7 @@ class H(BaseHTTPRequestHandler):
             sync["text"] = raw.decode("utf-8", "replace"); return self._json({"ok": True})
         d = json.loads(raw)
         if self.path.split("?")[0] == "/ai":           # AI に聞く {prompt, json}
-            text = gemini(d.get("prompt", ""), bool(d.get("json")), d.get("image") or None)
+            text = gemini(d.get("prompt", ""), bool(d.get("json")), d.get("image") or None, audio_b64=d.get("audio") or None)
             return self._json({"text": text})
         if self.path.split("?")[0] == "/input.json":   # 機器の割り当てを保存
             json.dump(d, open(INPUT_JSON, "w"), ensure_ascii=False, indent=1); return self._json({"saved": True})

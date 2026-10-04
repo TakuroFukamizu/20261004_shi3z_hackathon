@@ -21,9 +21,11 @@ Commands (besides the robot's own: face, grip, servo, calibrate, torque, volume,
   look   yaw pitch [speed]       stream a head target (latest wins, smooth; for tracking/gaze)
   head   yaw pitch [speed][wait] move the head; wait=true returns when it gets there
   drive  x y rot ms [wait]       wheels for ms (max 30000), kept alive against packet loss
-  stop                           wheels, head and voice
+  stop                           wheels, head and voice; also cancels a grid plan
   wait   event [timeout]         block until the next event with that name
   events [since]                 recent events
+  grid_status / grid_set / grid_move / grid_step / grid_turn / grid_cal
+  claw / catch                   gripper, and a chase onto a mat cell (see stackchan_grid.py)
 Standard library only.
 """
 import argparse
@@ -41,6 +43,8 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import stackchan_grid as gridlib
 from urllib.parse import parse_qs, urlparse
 
 RT_PORT = 8790
@@ -260,6 +264,217 @@ class Look:
                 self.link.stream(t)
 
 
+class GridController:
+    """Dead-reckoning plans on top of Drive. The human declares the pose with grid_set.
+
+    A stop, or any new grid motion, cancels the plan that is running. Cancelling a
+    segment keeps the cells (or quarter-turns) completed so far, rounded, and marks
+    the pose uncertain until the next grid_set. Stopping while idle does not.
+    """
+
+    def __init__(self, drive, link):
+        self.drive = drive
+        self.link = link
+        self.lock = threading.Lock()
+        self.cal = gridlib.load_calibration()
+        self.pose = gridlib.Pose(4, 5, "N", uncertain=True)
+        self.cancel_ev = threading.Event()
+        self.idle = threading.Event()
+        self.idle.set()
+        self._owner = None
+
+    def snapshot(self):
+        with self.lock:
+            pose = self.pose
+        return {"col": pose.col, "row": pose.row, "heading": pose.heading, "uncertain": pose.uncertain}
+
+    def status(self):
+        with self.lock:
+            cal = self.cal
+        return {"ok": True, "pose": self.snapshot(), "calibration": gridlib.calibration_dict(cal)}
+
+    def _ok(self):
+        return {"ok": True, "pose": self.snapshot()}
+
+    def _pose(self):
+        with self.lock:
+            return self.pose
+
+    def _cal(self):
+        with self.lock:
+            return self.cal
+
+    def _store(self, pose):
+        with self.lock:
+            self.pose = pose
+
+    def _mark_uncertain(self):
+        with self.lock:
+            pose = self.pose
+            self.pose = gridlib.Pose(pose.col, pose.row, pose.heading, True)
+
+    def cancel(self):
+        """Ask the running plan to stop. Returns when it has released the wheels."""
+        self.cancel_ev.set()
+        self.drive.stop()
+        if threading.current_thread() is not self._owner:
+            self.idle.wait(8)
+
+    def _finish(self):
+        self.drive.stop()
+        self._owner = None
+        self.idle.set()
+
+    def _launch(self, fn, wait):
+        self.cancel()
+        self.cancel_ev.clear()
+        self.idle.clear()
+        if wait:
+            self._owner = threading.current_thread()
+            try:
+                fn()
+            finally:
+                self._finish()
+            return self._ok()
+
+        def background():
+            self._owner = threading.current_thread()
+            try:
+                fn()
+            finally:
+                self._finish()
+
+        threading.Thread(target=background, daemon=True).start()
+        return self._ok()
+
+    def set_pose(self, col, row, heading):
+        text = str(heading).strip().upper()
+        if text not in gridlib.HEADINGS:
+            raise ValueError(f"unknown heading {heading!r}")
+        col, row = gridlib.clamp_cell(col, row)
+        self.cancel()
+        self.cancel_ev.clear()
+        self._store(gridlib.Pose(col, row, text, False))
+        return self._ok()
+
+    def calibrate(self, updates):
+        updated = gridlib.apply_calibration(self._cal(), updates)
+        gridlib.save_calibration(updated)
+        with self.lock:
+            self.cal = updated
+        return self.status()
+
+    def _run_segment(self, segment):
+        if self.cancel_ev.is_set():
+            self._mark_uncertain()
+            return False
+        self.drive.set(segment.x, segment.y, segment.rot, segment.ms)
+        started = time.monotonic()
+        cancelled = self.cancel_ev.wait(segment.ms / 1000.0)
+        elapsed_ms = (time.monotonic() - started) * 1000.0
+        self.drive.stop()
+        if cancelled or self.cancel_ev.is_set():
+            self._store(gridlib.partial_pose(self._pose(), segment, elapsed_ms))
+            return False
+        with self.lock:
+            uncertain = self.pose.uncertain
+        end = segment.pose
+        self._store(gridlib.Pose(end.col, end.row, end.heading, uncertain))
+        settle = self._cal().settle_ms
+        if settle > 0 and self.cancel_ev.wait(settle / 1000.0):
+            self._mark_uncertain()
+            return False
+        return True
+
+    def _run_segments(self, segments):
+        for segment in segments:
+            if not self._run_segment(segment):
+                return False
+        return True
+
+    def _pulse(self, x, y, rot, ms):
+        """Timed wheels that do not move the recorded pose (the catch nudge)."""
+        if self.cancel_ev.is_set():
+            self._mark_uncertain()
+            return False
+        if ms > 0:
+            self.drive.set(x, y, rot, ms)
+            cancelled = self.cancel_ev.wait(ms / 1000.0)
+            self.drive.stop()
+            if cancelled or self.cancel_ev.is_set():
+                self._mark_uncertain()
+                return False
+        settle = self._cal().settle_ms
+        if settle > 0 and self.cancel_ev.wait(settle / 1000.0):
+            self._mark_uncertain()
+            return False
+        return True
+
+    def move(self, col, row, wait):
+        def fn():
+            self._run_segments(gridlib.plan_move(self._pose(), col, row, self._cal()))
+        return self._launch(fn, wait)
+
+    def step(self, direction, cells, wait):
+        def fn():
+            pose = self._pose()
+            col, row = gridlib.step_target(pose, direction, cells)
+            self._run_segments(gridlib.plan_move(pose, col, row, self._cal()))
+        return self._launch(fn, wait)
+
+    def turn(self, heading, wait):
+        def fn():
+            pose = self._pose()
+            target = gridlib.resolve_heading(pose, heading)
+            self._run_segments(gridlib.plan_turn(pose, target, self._cal()))
+        return self._launch(fn, wait)
+
+    def catch(self, col, row, wait):
+        def fn():
+            opened = self.link.call({"cmd": "grip", "percent": 0})
+            if not opened.get("ok") or self.cancel_ev.is_set():
+                if self.cancel_ev.is_set():
+                    self._mark_uncertain()
+                return
+            pose = self._pose()
+            segments, _approach = gridlib.plan_catch(pose, col, row, self._cal())
+            if not self._run_segments(segments):
+                return
+            # 0.4 cell forward, close, then the same nudge backward. The recorded
+            # cell stays the approach cell: the nudge is not a grid segment.
+            ms = int(round(0.4 * self._cal().fwd_ms_per_cell))
+            speed = self._cal().speed
+            if not self._pulse(0, speed, 0, ms):
+                return
+            closed = self.link.call({"cmd": "grip", "percent": 100})
+            if not closed.get("ok") or self.cancel_ev.is_set():
+                if self.cancel_ev.is_set():
+                    self._mark_uncertain()
+                return
+            self._pulse(0, -speed, 0, ms)
+        return self._launch(fn, wait)
+
+
+def _wait_flag(d):
+    if "wait" not in d:
+        return True
+    value = d["wait"]
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no")
+    return bool(value)
+
+
+def _claw_percent(d):
+    if d.get("percent") is not None:
+        return max(0, min(100, int(d["percent"])))
+    state = str(d.get("state", "")).strip().lower()
+    if state == "open":
+        return 0
+    if state == "close":
+        return 100
+    raise ValueError("claw needs state open|close or percent")
+
+
 class Hub:
     PASS = {"face", "grip", "servo", "calibrate", "torque", "volume", "beep"}
 
@@ -267,6 +482,12 @@ class Hub:
         self.link = link
         self.drive = Drive(link)
         self.look = Look(link)
+        self.grid = GridController(self.drive, link)
+
+    def _need_rover(self):
+        if not self.link.state.get("rover"):
+            return {"ok": False, "error": "rover not connected"}
+        return None
 
     def status(self):
         s = dict(self.link.state)
@@ -287,13 +508,39 @@ class Hub:
         if cmd == "wait":
             since = d.get("since")
             return self.link.wait_event(d["event"], float(d.get("timeout", 30)), None if since is None else int(since))
+        if cmd == "grid_status":
+            return self.grid.status()
+        if cmd == "grid_set":
+            return self.grid.set_pose(d.get("col"), d.get("row"), d.get("heading"))
+        if cmd == "grid_cal":
+            fields = {key: d[key] for key in gridlib.CAL_FIELDS if key in d}
+            return self.grid.calibrate(fields)
         if not self.link.up():
             return {"ok": False, "error": "robot offline"}
         if cmd in self.PASS:
             return self.link.call(d)
         if cmd == "stop":
+            self.grid.cancel()
             self.drive.stop()
             return self.link.call({"cmd": "stop"})
+        if cmd == "claw":
+            res = self.link.call({"cmd": "grip", "percent": _claw_percent(d)})
+            if res.get("ok"):
+                res = dict(res)
+                res["pose"] = self.grid.snapshot()
+            return res
+        if cmd in ("grid_move", "grid_step", "grid_turn", "catch"):
+            missing = self._need_rover()
+            if missing:
+                return missing
+            wait = _wait_flag(d)
+            if cmd == "grid_move":
+                return self.grid.move(d.get("col"), d.get("row"), wait)
+            if cmd == "grid_step":
+                return self.grid.step(d.get("dir", d.get("direction")), d.get("cells", 1), wait)
+            if cmd == "grid_turn":
+                return self.grid.turn(d.get("heading"), wait)
+            return self.grid.catch(d.get("col"), d.get("row"), wait)
         if cmd == "look":
             self.look.set(d.get("yaw", 0), d.get("pitch", 45), d.get("speed", 700))
             return {"ok": True}

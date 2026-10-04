@@ -198,6 +198,64 @@ try:
     late = [d for d in robot.executed[n:] if d.get("cmd") == "drive"]
     check("stop cancels drive refresh", not late and not sc.status()["driving"])
 
+    # Grid motion is dead reckoning. Fast calibration keeps this section short.
+    # Restore the on-disk guesses afterwards: grid_cal writes stackchan_grid.json.
+    cal_path = os.path.join(os.path.dirname(__file__), "stackchan_grid.json")
+    with open(cal_path, encoding="utf-8") as cal_file:
+        cal_backup = cal_file.read()
+    try:
+        r = sc.grid_set(4, 5, "N")
+        pose = r.get("pose") or {}
+        check("grid_set declares the pose",
+              r.get("ok") and (pose.get("col"), pose.get("row"), pose.get("heading")) == (4, 5, "N")
+              and pose.get("uncertain") is False, str(pose))
+        sc.grid_cal(speed=40, fwd_ms_per_cell=150, strafe_ms_per_cell=200,
+                    start_ms=50, settle_ms=30, turn_ms_per_90=80, rot_sign=1)
+        before = len(robot.executed)
+        started = time.time()
+        r = sc.grid_move(2, 3, wait=True)
+        took = time.time() - started
+        expect = ((50 + 2 * 200) + (50 + 2 * 150) + 2 * 30) / 1000.0
+        kinds = []
+        for packet in robot.executed[before:]:
+            if packet.get("cmd") != "drive":
+                continue
+            x, y = packet.get("x", 0), packet.get("y", 0)
+            if x < 0 and y == 0:
+                kinds.append("strafe")
+            elif y > 0 and x == 0:
+                kinds.append("forward")
+        pose = r.get("pose") or {}
+        check("grid_move strafes left then drives forward",
+              "strafe" in kinds and "forward" in kinds and kinds.index("strafe") < kinds.index("forward")
+              and abs(took - expect) <= 0.2
+              and (pose.get("col"), pose.get("row"), pose.get("heading")) == (2, 3, "N")
+              and pose.get("uncertain") is False,
+              f"took {took:.3f}s expect {expect:.3f}s pose {pose} moves {kinds}")
+
+        sc.grid_set(4, 5, "N")
+        before = len(robot.executed)
+        r = sc.catch(4, 3, wait=True)
+        grips = [packet.get("percent") for packet in robot.executed[before:] if packet.get("cmd") == "grip"]
+        pose = r.get("pose") or {}
+        check("catch opens then closes and stays on the approach cell",
+              grips and grips[0] == 0 and grips[-1] == 100
+              and (pose.get("col"), pose.get("row"), pose.get("heading")) == (4, 4, "N")
+              and pose.get("uncertain") is False,
+              f"grips {grips} pose {pose}")
+
+        sc.grid_cal(fwd_ms_per_cell=1500, start_ms=40, settle_ms=20)
+        sc.grid_set(4, 5, "N")
+        sc.grid_move(4, 1, wait=False)
+        time.sleep(0.25)
+        sc.stop()
+        time.sleep(0.3)
+        pose = sc.grid_status().get("pose") or {}
+        check("stop during grid_move marks the pose uncertain", pose.get("uncertain") is True, str(pose))
+    finally:
+        with open(cal_path, "w", encoding="utf-8") as cal_file:
+            cal_file.write(cal_backup)
+
     # link loss is detected and commands are refused
     robot.telemetry = False
     time.sleep(2.0)

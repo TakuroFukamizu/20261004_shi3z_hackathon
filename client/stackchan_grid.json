@@ -1,0 +1,9 @@
+{
+  "speed": 50,
+  "fwd_ms_per_cell": 700,
+  "strafe_ms_per_cell": 900,
+  "start_ms": 80,
+  "turn_ms_per_90": 650,
+  "settle_ms": 150,
+  "rot_sign": 1
+}

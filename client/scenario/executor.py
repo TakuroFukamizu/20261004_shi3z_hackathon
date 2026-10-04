@@ -8,7 +8,7 @@ import json
 import threading
 import time
 
-from formations import FORMATIONS, assign
+from formations import FORMATIONS, assign, clear_of_robot
 
 LOOK = {
     "center": (0, 45),
@@ -105,8 +105,89 @@ def _drive_group(side, group, ids, left, right, ms):
             side.call("drive", id=cube_id, left=left, right=right, ms=ms)
 
 
-def _body(side, kind):
-    """In-place RoverC gestures. Each drive waits until that pulse ends."""
+def _stackchan_pose(side, dry_run):
+    """(col, row, heading). A dry run assumes the south-centre cell, facing north.
+
+    Live, a missing pose means the caller should not guess.
+    """
+    if dry_run:
+        return (4, 5, "N")
+    if side is None:
+        return None
+    res = side.call("grid_status")
+    pose = res.get("pose") if isinstance(res, dict) else None
+    if not isinstance(pose, dict) or pose.get("col") is None or pose.get("row") is None:
+        return None
+    heading = str(pose.get("heading") or "N").upper()
+    if heading not in ("N", "E", "S", "W"):
+        heading = "N"
+    try:
+        return int(pose["col"]), int(pose["row"]), heading
+    except (TypeError, ValueError):
+        return None
+
+
+def _dry_chase_cubes():
+    """Home formation, so a dry run still has a nearest cube to catch."""
+    return [{"id": index, "connected": True, "col": col, "row": row}
+            for index, (col, row) in enumerate(FORMATIONS["home"], start=1)]
+
+
+def _nearest_cube(cubes, col, row):
+    best = None
+    for cube in cubes:
+        if not cube.get("connected", True):
+            continue
+        if cube.get("col") is None or cube.get("row") is None:
+            continue
+        try:
+            cube_id = int(cube.get("id", 10**9))
+            cube_col, cube_row = int(cube["col"]), int(cube["row"])
+        except (TypeError, ValueError):
+            continue
+        rank = (abs(cube_col - col) + abs(cube_row - row), cube_id)
+        if best is None or rank < best[0]:
+            best = (rank, cube_col, cube_row)
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
+def _chase(side, toio_side, dry_run, log):
+    pose = _stackchan_pose(side, dry_run)
+    if pose is None:
+        log("chase skipped: StackChan pose unknown")
+        return
+    if toio_side is None:
+        log("chase skipped: no toio")
+        return
+    if dry_run:
+        cubes = _dry_chase_cubes()
+    else:
+        res = toio_side.call("status")
+        cubes = res.get("cubes") if isinstance(res, dict) else None
+        cubes = cubes or []
+    target = _nearest_cube(cubes, pose[0], pose[1])
+    if target is None:
+        log("chase skipped: no cube position")
+        return
+    side.call("catch", col=target[0], row=target[1], wait=True)
+
+
+def _body(side, kind, toio_side, dry_run, log):
+    """In-place gestures, or a grid chase / grab / return to centre."""
+    if kind == "chase":
+        _chase(side, toio_side, dry_run, log)
+        return
+    if kind == "grab":
+        side.call("claw", state="close")
+        _pause(0.6, dry_run, log, "grab")
+        side.call("claw", state="open")
+        return
+    if kind == "go_center":
+        side.call("grid_move", col=4, row=3, wait=True)
+        return
+
     def pulse(x=0, y=0, rot=0, ms=250):
         side.call("drive", x=x, y=y, rot=rot, ms=ms, wait=True)
 
@@ -165,7 +246,7 @@ def _color(side, step, ids):
     side.call("led", id="all", r=r, g=g, b=b)
 
 
-def _toio(side, step, dry_run, log):
+def _toio(side, step, dry_run, log, stackchan_side=None):
     cubes = [] if dry_run else _cubes_now(side)
     everyone = _ids(cubes)
     dancers = _ids(cubes, step["toio_group"])
@@ -176,7 +257,12 @@ def _toio(side, step, dry_run, log):
     if move in FORMATIONS:
         if not dry_run:
             cubes = _cubes_now(side) or cubes
-        mapping = assign(cubes or _dry_cubes(), FORMATIONS[move])
+        cells = FORMATIONS[move]
+        if dry_run or stackchan_side is not None:
+            pose = _stackchan_pose(stackchan_side, dry_run)
+            if pose:
+                cells = clear_of_robot(cells, *pose)
+        mapping = assign(cubes or _dry_cubes(), cells)
         targets = [{"id": cube_id, "col": col, "row": row}
                    for cube_id, (col, row) in sorted(mapping.items())]
         if targets:
@@ -264,11 +350,13 @@ def run(scenario, stackchan, toio, dry_run=False, log=print):
                     target=_guard, args=("stackchan", lambda s=step: _speech(sc, s), log), daemon=True))
                 if step.get("body") not in (None, "none"):
                     tracks.append(threading.Thread(
-                        target=_guard, args=("stackchan body", lambda s=step: _body(sc, s["body"]), log),
+                        target=_guard,
+                        args=("stackchan body", lambda s=step: _body(sc, s["body"], cubes, dry_run, log), log),
                         daemon=True))
             if cubes is not None and _toio_needed(step):
                 tracks.append(threading.Thread(
-                    target=_guard, args=("toio", lambda s=step: _toio(cubes, s, dry_run, log), log),
+                    target=_guard,
+                    args=("toio", lambda s=step: _toio(cubes, s, dry_run, log, sc), log),
                     daemon=True))
             if tracks:
                 _join(tracks, log)

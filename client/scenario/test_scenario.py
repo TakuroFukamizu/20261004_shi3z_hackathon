@@ -19,7 +19,7 @@ sys.path.insert(0, CLIENT)
 import fake_toio_hub  # noqa: E402
 from executor import run  # noqa: E402
 from fake_toio_hub import HubState, make_server, plan_moves  # noqa: E402
-from formations import FORMATIONS, assign, cell_center  # noqa: E402
+from formations import FORMATIONS, assign, cell_center, clear_of_robot  # noqa: E402
 from generate import generate  # noqa: E402
 from normalize import ScenarioError, normalize  # noqa: E402
 from stackchan import StackChan  # noqa: E402
@@ -97,6 +97,23 @@ class FormationTests(unittest.TestCase):
         self.assertEqual(len(full), 9)
         self.assertEqual(len(set(full.values())), 9)
         self.assertTrue(set(full.values()) <= set(FORMATIONS["square"]))
+
+    def test_clear_of_robot_replaces_its_cell_and_the_cell_in_front(self):
+        # (4, 5) and the cell north of it are blocked. Ties break toward the smaller column.
+        out = clear_of_robot([(4, 5), (4, 4), (1, 1)], 4, 5, "N")
+        # (4, 4) is closer than a sideways neighbour because a cell is slightly wider than it is tall.
+        self.assertEqual(out, [(3, 5), (4, 3), (1, 1)])
+        cleared = clear_of_robot(FORMATIONS["square"], 4, 5, "N")
+        self.assertEqual(len(cleared), 9)
+        self.assertEqual(len(set(cleared)), 9)
+        self.assertNotIn((4, 4), cleared)
+        self.assertNotIn((4, 5), cleared)
+        self.assertTrue(all(1 <= col <= 7 and 1 <= row <= 5 for col, row in cleared))
+        # Facing west on the left edge, the cell in front is off the mat.
+        edge = clear_of_robot([(1, 1), (2, 1)], 1, 1, "W")
+        self.assertEqual(len(set(edge)), 2)
+        self.assertNotIn((1, 1), edge)
+        self.assertTrue(all(1 <= col <= 7 and 1 <= row <= 5 for col, row in edge))
 
 
 class NormalizeTests(unittest.TestCase):
@@ -355,6 +372,107 @@ class ExecutorTests(unittest.TestCase):
         heads = [e for e in sc_http.events if e["cmd"] == "head" and e["req"].get("yaw") == 0]
         self.assertTrue(any(e["req"].get("pitch") == 45 for e in heads))
         self.assertIn("stop", [e["cmd"] for e in toio_http.events])
+
+    def test_chase_grab_and_go_center(self):
+        pose = {"col": 4, "row": 5, "heading": "N", "uncertain": False}
+        cubes = [
+            {"id": 1, "connected": True, "col": 1, "row": 1},
+            {"id": 2, "connected": True, "col": 4, "row": 4},
+        ]
+        sc_http = _json_hub(18787, pose=pose)
+        toio_http = _json_hub(18788, cubes=cubes)
+        scenario = {"title": "追跡", "steps": [
+            _step(say="追え", face="angry", look="toio", body="chase"),
+            _step(say="つかめ", face="happy", look="down", body="grab"),
+            _step(say="もどる", face="neutral", look="center", body="go_center"),
+        ]}
+        try:
+            run(scenario, StackChan("http://127.0.0.1:18787", raise_errors=False),
+                Toio("http://127.0.0.1:18788", raise_errors=False), log=lambda *_: None)
+        finally:
+            _stop(sc_http)
+            _stop(toio_http)
+        catches = [event for event in sc_http.events if event["cmd"] == "catch"]
+        self.assertEqual(len(catches), 1)
+        self.assertEqual(catches[0]["req"]["col"], 4)
+        self.assertEqual(catches[0]["req"]["row"], 4)
+        self.assertTrue(any(event["cmd"] == "grid_status" for event in sc_http.events))
+        claws = [event for event in sc_http.events if event["cmd"] == "claw"]
+        self.assertEqual([event["req"].get("state") for event in claws], ["close", "open"])
+        self.assertGreaterEqual(claws[1]["t0"] - claws[0]["t0"], 0.5)
+        moves = [event for event in sc_http.events if event["cmd"] == "grid_move"]
+        self.assertEqual([(event["req"]["col"], event["req"]["row"]) for event in moves], [(4, 3)])
+        self.assertTrue(moves[0]["req"]["wait"])
+
+    def test_formation_leaves_stackchan_and_the_cell_in_front(self):
+        pose = {"col": 4, "row": 5, "heading": "N", "uncertain": False}
+        cubes = [{"id": index, "connected": True} for index in range(1, 10)]
+        sc_http = _json_hub(18789, pose=pose)
+        toio_http = _json_hub(18792, cubes=cubes)
+        scenario = {"title": "よける", "steps": [
+            _step(say="ならべ", face="happy", body="none", toio_move="square"),
+        ]}
+        try:
+            run(scenario, StackChan("http://127.0.0.1:18789", raise_errors=False),
+                Toio("http://127.0.0.1:18792", raise_errors=False), log=lambda *_: None)
+        finally:
+            _stop(sc_http)
+            _stop(toio_http)
+        move_all = [event for event in toio_http.events if event["cmd"] == "move_all"]
+        self.assertEqual(len(move_all), 1)
+        cells = [(target["col"], target["row"]) for target in move_all[0]["req"]["targets"]]
+        self.assertEqual(set(map(tuple, cells)), set(clear_of_robot(FORMATIONS["square"], 4, 5, "N")))
+        self.assertNotIn((4, 4), cells)
+        self.assertNotIn((4, 5), cells)
+
+    def test_dry_run_chase_catches_the_home_cube(self):
+        class Boom:
+            def cmd(self, *args, **kwargs):
+                raise AssertionError("dry-run touched the network")
+
+        logs = []
+        run({"title": "予行追跡", "steps": [
+            _step(say="いけ", face="angry", look="toio", body="chase"),
+        ]}, Boom(), Boom(), dry_run=True, log=logs.append)
+        text = "\n".join(logs)
+        self.assertIn("stackchan catch", text)
+        self.assertIn('"col": 4', text)
+        self.assertIn('"row": 5', text)
+
+
+class _JsonHub(BaseHTTPRequestHandler):
+    """Tiny hub: grid_status can carry a pose, status can carry cubes."""
+
+    def log_message(self, fmt, *args):
+        return
+
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        req = json.loads(raw or b"{}")
+        event = {"t0": time.monotonic(), "cmd": req.get("cmd"), "req": req}
+        with self.server.lock:
+            self.server.events.append(event)
+        resp = {"ok": True, "link_up": True, "rover": True}
+        if req.get("cmd") == "grid_status" and self.server.pose is not None:
+            resp["pose"] = self.server.pose
+        if req.get("cmd") == "status" and self.server.cubes is not None:
+            resp["cubes"] = self.server.cubes
+        body = json.dumps(resp).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _json_hub(port, pose=None, cubes=None):
+    httpd = ThreadingHTTPServer(("127.0.0.1", port), _JsonHub)
+    httpd.lock = threading.Lock()
+    httpd.events = []
+    httpd.pose = pose
+    httpd.cubes = cubes
+    _serve(httpd)
+    return httpd
 
 
 if __name__ == "__main__":

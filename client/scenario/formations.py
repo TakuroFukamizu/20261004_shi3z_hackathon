@@ -112,6 +112,62 @@ def _min_cost_assign(costs):
     return choice
 
 
+def _in_grid(col, row):
+    return 1 <= col <= COLS and 1 <= row <= ROWS
+
+
+def _front(col, row, heading):
+    step = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}.get(heading)
+    if step is None:
+        return None
+    nxt = (col + step[0], row + step[1])
+    return nxt if _in_grid(*nxt) else None
+
+
+def _nearest_free(origin, blocked):
+    """In-grid cell not in `blocked`, nearest by centre, then smaller col, then row."""
+    ox, oy = cell_center(*origin)
+    best = None
+    best_key = None
+    for row in range(1, ROWS + 1):
+        for col in range(1, COLS + 1):
+            cand = (col, row)
+            if cand in blocked:
+                continue
+            key = (_dist2(cell_center(col, row), (ox, oy)), col, row)
+            if best_key is None or key < best_key:
+                best_key = key
+                best = cand
+    return best
+
+
+def clear_of_robot(cells, col, row, heading):
+    """Formation cells that leave the robot's cell and the cell in front empty.
+
+    Each blocked cell is replaced by the nearest free in-grid cell that is not
+    already taken. The result stays the same length, with distinct cells.
+    """
+    blocked = {(int(col), int(row))}
+    front = _front(int(col), int(row), heading)
+    if front:
+        blocked.add(front)
+    used = set()
+    out = []
+    for cell in cells:
+        cell = (int(cell[0]), int(cell[1]))
+        if cell not in blocked and cell not in used:
+            out.append(cell)
+            used.add(cell)
+            continue
+        replacement = _nearest_free(cell, blocked | used)
+        if replacement is None:
+            out.append(cell)
+            continue
+        out.append(replacement)
+        used.add(replacement)
+    return out
+
+
 def assign(cubes, cells):
     """Map connected cubes to distinct cells, minimising total travel.
 

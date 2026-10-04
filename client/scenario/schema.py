@@ -6,7 +6,10 @@ later in formations.py; they are intentionally absent from the schema.
 
 FACES = ("neutral", "happy", "angry", "sad", "doubt", "sleepy")
 LOOKS = ("center", "left", "right", "up", "down", "toio")
-BODIES = ("none", "wiggle", "turn_left", "turn_right", "nod", "dance")
+BODIES = (
+    "none", "wiggle", "turn_left", "turn_right", "nod", "dance",
+    "chase", "grab", "go_center",
+)
 TOIO_MOVES = (
     "none",
     "square", "circle", "line", "heart", "x", "scatter", "home",

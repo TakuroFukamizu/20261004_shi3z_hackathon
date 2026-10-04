@@ -302,3 +302,32 @@ python3 client/scenario/test_scenario.py              # 機体も LLM も使わ�
 `--model`（既定 `qwen2.5-3b`）、`--steps`（最大ステップ数、既定 6）、`--seed`、
 `--stackchan-hub` / `--toio-hub`、`--no-stackchan`、`--no-toio`。
 片方のハブが落ちていても、ある方だけで続ける。Ctrl-C で両方止める。
+
+## StackChan のマス移動とクロー
+
+StackChan（RoverC Pro のメカナム）は toio と同じ 7 列×5 行のマットをマス単位で動く。前のクローは `grip`（0 が開、100 が閉）である。位置センサは無い。進んだマス数は時間からの推定（デッドレコニング）で、人が見て捕まったかどうかを判断する。
+
+最初にロボットをマスの中央へ置き、向いている方角を宣言する。列は左から 1..7、行は奥（上）から 1..5。N は行 1 の方向、E は列 7 の方向。
+
+```sh
+python3 client/stackchan.py grid set 4 5 N          # 今いるマスと向き
+python3 client/stackchan.py grid status             # 推定ポーズと補正値
+python3 client/stackchan.py grid move 2 3           # 横に進んでから縦に進む
+python3 client/stackchan.py grid step forward 2
+python3 client/stackchan.py grid turn E             # left / right / around も可
+python3 client/stackchan.py claw open               # close、または --percent 40
+python3 client/stackchan.py catch 3 2               # 隣の空きマスへ回り込み、近づいて閉じる
+```
+
+`client/stackchan_grid.json` の初期値（速度 50、前進 700 ms/マス、横移動 900 ms/マス、加速 80 ms、90 度 650 ms、停止後 150 ms、`rot_sign` 1）は会場で合わせるための当てずっぽうである。マスの中央に置いてから、何マス分か走らせて定規で見る。
+
+```sh
+python3 client/stackchan.py grid test forward 2     # 前進。届かなければ fwd を上げ、行き過ぎなら下げる
+python3 client/stackchan.py grid test strafe 2      # 右への横移動
+python3 client/stackchan.py grid test turn 2        # 左へ 90 度を 2 回。逆回転なら rot_sign を反転
+python3 client/stackchan.py grid cal --fwd-ms-per-cell 650 --strafe-ms-per-cell 800 --turn-ms-per-90 600
+```
+
+`grid test` は車輪を直接回すだけで、記憶しているマスは更新しない。測り終わったら置き直して `grid set` する。
+
+ずれたら推定はそれ以上信用しない。もう一度マスの中央へ置き、`grid set` で宣言し直す。`stop` や次の移動指令で走行を切ると、途中のマス数を四捨五入してポーズを更新し、`uncertain` を true にする。次の `grid set` までその印は残る。シナリオの `chase` は一番近い toio へ `catch`、`grab` はその場で閉じて開く、`go_center` は (4, 3) へ移動する。隊形を組むときは StackChan のマスと、その正面のマスを空ける。

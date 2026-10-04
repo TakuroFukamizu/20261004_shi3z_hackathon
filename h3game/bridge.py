@@ -66,6 +66,21 @@ def gemini(prompt, want_json=False, image_b64=None, timeout=25, audio_b64=None):
             return ""
     return ""
 
+LLM_URL = os.environ.get("H3_LLM_URL", "http://192.168.100.143:8080/v1/chat/completions")   # 会場の GPU サーバー(Qwen2.5-3B, OpenAI 互換)
+
+def llm(prompt, want_json=False, timeout=15):
+    """文字だけの LLM に聞く(音声は渡せない)。失敗したら "" を返す。"""
+    import urllib.request
+    body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0.8, "max_tokens": 300}
+    if want_json: body["response_format"] = {"type": "json_object"}
+    try:
+        req = urllib.request.Request(LLM_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)["choices"][0]["message"]["content"]
+    except Exception as e:
+        print("LLM エラー:", e)
+        return ""
+
 def hid_list():
     """Mac が見ている USB の入力機器(スティック・ペダルなど)。Apple 内蔵は除く。"""
     import re, subprocess
@@ -204,7 +219,9 @@ class H(BaseHTTPRequestHandler):
             sync["text"] = raw.decode("utf-8", "replace"); return self._json({"ok": True})
         d = json.loads(raw)
         if self.path.split("?")[0] == "/ai":           # AI に聞く {prompt, json}
-            text = gemini(d.get("prompt", ""), bool(d.get("json")), d.get("image") or None, audio_b64=d.get("audio") or None)
+            # Gemini のキーがあれば音声ごと渡す。無ければ会場の LLM に文字だけで聞く
+            text = gemini(d.get("prompt", ""), bool(d.get("json")), d.get("image") or None, audio_b64=d.get("audio") or None) \
+                or llm(d.get("prompt", ""), bool(d.get("json")))
             return self._json({"text": text})
         if self.path.split("?")[0] == "/input.json":   # 機器の割り当てを保存
             json.dump(d, open(INPUT_JSON, "w"), ensure_ascii=False, indent=1); return self._json({"saved": True})

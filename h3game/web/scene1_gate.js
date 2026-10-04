@@ -3,37 +3,44 @@
 // マイクに「おはよう」と叫ぶ。声の大きさが HP、気合い(感情)が MP になる。
 //   pull   … 「レバーを引いて気合いを入れろ！」両レバーを手前いっぱいに引き続ける
 //   listen … 「力いっぱい、『おはよう』と言おう」録音
-//   judge  … AI(bridge の /ai → Gemini)が 言葉・感情・声の強さ を判定
+//   judge  … AI(bridge の /ai)が 言葉・感情・声の強さ を判定。
+//            AI は文字しか読めない LLM なので、言葉はブラウザの音声認識で文字にし、音量の実測と一緒に渡す
 //   result … 結果を見せて Scene2 へ。言えていなければやり直し
 // ============================================================
 (()=>{
  const PULL=0.85,CHARGE_SEC=1.5,LISTEN_SEC=3.5,MAX_TRIES=3;
  const HP_BASE=50,HP_PER=1.5,MP_BASE=20,MP_PER=1;   // HP=50..200(音量) MP=20..120(気合い)
- const PROMPT=`これは学校の校門で、生徒が生徒指導の先生に向かって挨拶した声の録音です。日本語です。
+ const prompt=(heard,r)=>`学校の校門で、生徒が生徒指導の先生に向かって挨拶しました。
+聞こえた言葉(音声認識の結果): 「${heard}」
+声の大きさ(実測): ${r.loud}/100 (${r.db} dB)
+声が出ていた時間: ${r.voiced} 秒
+(音声が添付されていれば、それも聞いて判断してください)
 次の JSON だけを返してください。
-{"transcript": "聞こえた言葉(聞こえなければ空文字)",
- "said_ohayou": 「おはよう」または「おはようございます」と言っていれば true,
- "emotion": "声から感じる感情を一言で(例: 元気, 怒り, 眠い, 照れ, 無気力)",
- "kiai": 気合い・感情の強さ 0〜100 の整数(棒読みや眠そうなら低く、腹から出た全力の声なら高く),
+{"said_ohayou": 「おはよう」または「おはようございます」と言っていれば true、違う言葉や無言なら false,
+ "emotion": "言葉と声の大きさから感じる感情を一言で(例: 元気, 怒り, 眠い, 照れ, 無気力)",
+ "kiai": 気合い・感情の強さ 0〜100 の整数(小声や短い声は低く、大声で伸ばした声や「！」の勢いがあれば高く),
  "volume": 声の大きさ・張りの印象 0〜100 の整数,
- "comment": "生徒指導の先生としての一言(20文字以内、熱血口調)"}`;
+ "comment": "生徒指導の先生が生徒に言い放つ一言(20文字以内、命令口調の熱血教師。例: 声が小さい！腹から出せ！ / よし！その意気だ！)"}`;
  let st,t,charge,pull,tries,rec,res,shake,hasMic;
 
  // Web Speech(ブラウザの音声認識)。AI が使えない時の言葉の聞き取り用
  let sr=null,srText='';
  function srStart(){srText='';const R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R)return;
   try{sr=new R();sr.lang='ja-JP';sr.interimResults=true;sr.onresult=e=>{srText=Array.from(e.results).map(r=>r[0].transcript).join('')};sr.onerror=()=>{};sr.start()}catch(e){sr=null}}
- function srStop(){try{sr&&sr.stop()}catch(e){}}
+ // 止めてから最後の結果が届くまで少し待つ
+ function srStop(){return new Promise(res=>{if(!sr)return res();const done=()=>{sr=null;res()};sr.onend=done;setTimeout(done,1500);try{sr.stop()}catch(e){done()}})}
 
  async function judge(){
-  let a=null;
-  try{const r=await fetch('/ai',{method:'POST',body:JSON.stringify({prompt:PROMPT,json:true,audio:rec.wav})});
+  let a=null;await srStop();
+  try{const r=await fetch('/ai',{method:'POST',body:JSON.stringify({prompt:prompt(srText,rec),json:true,audio:rec.wav})});
    const txt=(await r.json()).text||'';const m=txt.match(/\{[\s\S]*\}/);if(m)a=JSON.parse(m[0])}catch(e){}
   const num=v=>Math.max(0,Math.min(100,Math.round(+v||0)));
-  if(a)res={ai:true,transcript:String(a.transcript||''),said:!!a.said_ohayou,emotion:String(a.emotion||'?'),kiai:num(a.kiai),
+  // 小さい LLM は数字が甘いので、言えたかどうかは認識した文字で決め、気合いは実測(音量と声の長さ)と半々に混ぜる
+  const heard=/おはよ|お早/.test(srText)||(!srText&&rec.loud>=25),body=rec.loud*0.7+Math.min(1,rec.voiced/2)*30;
+  if(a)res={ai:true,transcript:srText||String(a.transcript||''),said:heard,emotion:String(a.emotion||'?'),kiai:num((num(a.kiai)+body)/2),
    loud:Math.round((rec.loud+num(a.volume))/2),db:rec.db,comment:String(a.comment||'')};
-  else{const said=/おはよ|お早/.test(srText)||(!srText&&rec.loud>=25);   // AI なし: 言葉はブラウザの認識、気合いは音量で代用
-   res={ai:false,transcript:srText,said,emotion:rec.loud>=60?'元気':rec.loud>=30?'ふつう':'眠い',kiai:rec.loud,loud:rec.loud,db:rec.db,
+  else{const said=heard;   // AI なし: 気合いは実測だけで決める
+   res={ai:false,transcript:srText,said,emotion:rec.loud>=60?'元気':rec.loud>=30?'ふつう':'眠い',kiai:num(body),loud:rec.loud,db:rec.db,
     comment:said?(rec.loud>=60?'よし、いい声だ！':'もっと腹から出せ！'):'聞こえんぞ！'}}
   if(!res.said&&tries>=MAX_TRIES){res.said=true;res.forced=true;res.comment='…もういい、通れ。'}
   if(res.said){const s=Game.status;s.hpMax=HP_BASE+100*HP_PER;s.mpMax=MP_BASE+100*MP_PER;
@@ -52,7 +59,7 @@
     m.pitch=charge*0.5+Math.sin(T*45)*0.08*charge;m.roll=Math.sin(T*37)*0.06*charge;   // 引くほど席がのけぞって震える
     if(charge>=1){tries++;if(!hasMic){noMic()}else{st='listen';t=0;Mic.start();srStart()}}}
    else if(st==='listen'){shake=Mic.level();m.pitch=0.5-shake*0.4;m.roll=Math.sin(T*50)*0.25*shake;m.yaw=Math.sin(T*31)*0.2*shake;   // 声で席が震える
-    if(t>=LISTEN_SEC){rec=Mic.stop();srStop();st='judge';t=0;judge()}}
+    if(t>=LISTEN_SEC){rec=Mic.stop();st='judge';t=0;judge()}}
    else if(st==='judge'){m.pitch=0.2+Math.sin(T*3)*0.05}
    else if(st==='result'){
     if(res.said){if(t>0.3&&t<1)m.pitch=-0.5;if(t>5||(t>1.5&&inp.fire))Game.go('status')}

@@ -2,7 +2,7 @@
 // Mic: マイクの音量を測り、声を録音する(16kHz モノラルの WAV)。
 //   Mic.init()          … マイクを開く。"USB PnP" の機器があればそれを選ぶ
 //   Mic.level()         … 今の音量 0..1(確認画面のメーター用)
-//   Mic.start() / await Mic.stop() … 録音。stop は {wav(base64), loud(0..100), db, seconds}
+//   Mic.start() / await Mic.stop() … 録音。stop は {wav(base64), loud(0..100), db, seconds, voiced(声が出ていた秒数)}
 // 音量を測るので、ブラウザの自動音量調整・雑音除去は切っている。
 // ============================================================
 const Mic=(()=>{
@@ -36,6 +36,7 @@ const Mic=(()=>{
   pcm.setUint32(24,RATE,true);pcm.setUint32(28,RATE*2,true);pcm.setUint16(32,2,true);pcm.setUint16(34,16,true);str(36,'data');pcm.setUint32(40,n*2,true);
   let o=44;for(const c of chunks)for(let i=0;i<c.length;i++,o+=2)pcm.setInt16(o,Math.max(-1,Math.min(1,c[i]))*32767,true);
   const u=new Uint8Array(pcm.buffer);let bin='';for(let i=0;i<u.length;i+=8192)bin+=String.fromCharCode.apply(null,u.subarray(i,i+8192));
-  const db=toDb(loudRms);return {wav:btoa(bin),loud:score(db),db:+db.toFixed(1),seconds:n/RATE}}
+  const db=toDb(loudRms),voiced=rms.filter(v=>toDb(v)>DB_MIN+8).length*2048/RATE;   // 声が出ていた秒数
+  return {wav:btoa(bin),loud:score(db),db:+db.toFixed(1),seconds:n/RATE,voiced:+voiced.toFixed(1)}}
  return {init,resume,level,start,stop,ok:()=>!!stream,label:()=>label,error:()=>err}
 })();

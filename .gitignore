@@ -3,3 +3,4 @@ firmware/include/secrets.h
 __pycache__/
 *.wav
 .DS_Store
+build.log

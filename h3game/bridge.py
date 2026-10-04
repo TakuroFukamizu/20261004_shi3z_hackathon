@@ -9,7 +9,7 @@ import json, os, sys, threading, time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-PORT = 8891
+PORT = int(os.environ.get("H3_PORT", 8891))
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 INPUT_JSON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "input.json")   # 機器の割り当て
 rig = None

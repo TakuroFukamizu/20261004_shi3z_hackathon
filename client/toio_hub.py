@@ -88,6 +88,7 @@ class Cube:
 
     async def move(self, x, y, angle=None, speed=80, timeout=10):
         """Send the cube to (x, y) and wait for its answer. Returns a result name, never raises."""
+        self._finish_all("interrupted")     # a newer move replaces the one in progress
         self._seq = (self._seq + 1) % 256
         control_id = self._seq
         fut = asyncio.get_running_loop().create_future()
@@ -248,17 +249,24 @@ class Hub:
         from bleak import BleakClient
 
         def lost(_client):
+            if cube.client is not client:   # a link we already gave up on
+                return
             print("cube %d (%s) disconnected" % (cube.id, cube.name))
             cube.on_disconnect()
 
         client = BleakClient(device, disconnected_callback=lost)
         await client.connect()
+        try:
+            await client.start_notify(P.ID_INFO, cube.on_id)
+            await client.start_notify(P.MOTOR, cube.on_motor)
+            await client.start_notify(P.BATTERY, cube.on_battery)
+            cube.on_id(None, await client.read_gatt_char(P.ID_INFO))
+            cube.on_battery(None, await client.read_gatt_char(P.BATTERY))
+        except Exception:
+            # let go of the link, or the cube stops advertising and can never be found again
+            await _quietly(client.disconnect())
+            raise
         cube.client = client
-        await client.start_notify(P.ID_INFO, cube.on_id)
-        await client.start_notify(P.MOTOR, cube.on_motor)
-        await client.start_notify(P.BATTERY, cube.on_battery)
-        cube.on_id(None, await client.read_gatt_char(P.ID_INFO))
-        cube.on_battery(None, await client.read_gatt_char(P.BATTERY))
         cube.connected = True
         print("cube %d (%s) connected, battery %s%%" % (cube.id, cube.name, cube.battery))
 
@@ -267,6 +275,10 @@ class Hub:
         from bleak import BleakScanner
 
         while True:
+            for cube in self.cubes.values():
+                if cube.connected and not cube.client.is_connected:    # the link died without a callback
+                    print("cube %d (%s) lost" % (cube.id, cube.name))
+                    cube.on_disconnect()
             missing = [c for _, c in sorted(self.cubes.items()) if not c.connected]
             if missing:
                 try:
@@ -286,16 +298,20 @@ class Hub:
             await asyncio.sleep(self.RETRY)
 
     async def shutdown(self):
-        """Stop and release every cube. Called on exit, so each step is best effort."""
-        for cube in self.cubes.values():
-            if not cube.connected:
-                continue
-            try:
-                await cube.stop()
-                await cube.write(P.LIGHT, P.LED_OFF)
-                await cube.client.disconnect()
-            except Exception:
-                pass
+        """Stop every cube first, then release them. Called on exit, so each step is best effort."""
+        cubes = [c for c in self.cubes.values() if c.connected]
+        await asyncio.gather(*(_quietly(c.stop()) for c in cubes))
+        for cube in cubes:
+            await _quietly(cube.write(P.LIGHT, P.LED_OFF))
+            await _quietly(cube.client.disconnect())
+
+
+async def _quietly(coro, timeout=2):
+    """Run a clean-up step that must not block or abort the steps after it."""
+    try:
+        await asyncio.wait_for(coro, timeout)
+    except Exception:
+        pass
 
 
 def suffix(name):
@@ -397,8 +413,8 @@ async def run(args):
     try:
         await hub.keep_connected()
     finally:
+        await hub.shutdown()    # cubes stop before anything that can block
         server.shutdown()
-        await hub.shutdown()
 
 
 def main(argv=None):

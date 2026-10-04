@@ -193,6 +193,14 @@ class HubCase(unittest.IsolatedAsyncioTestCase):
         for cid in (1, 2, 3):
             self.assertEqual(self.writes(cid)[-1], (P.MOTOR, P.STOP))
 
+    async def test_second_move_interrupts_the_first(self):
+        first = await self.start({"cmd": "move", "id": 1, "col": 4, "row": 3})
+        second = await self.start({"cmd": "move", "id": 1, "col": 5, "row": 3})
+        self.assertEqual((await asyncio.wait_for(first, 1))["results"], {"1": "interrupted"})
+        self.assertEqual(self.hub.cubes[1].target, self.hub.mat.cell_center(5, 3))
+        self.answer(1, 0x00)
+        self.assertEqual((await second)["results"], {"1": "reached"})
+
     async def test_stop_one(self):
         self.assertEqual(await self.hub.handle({"cmd": "stop", "id": 2}), {"ok": True, "ids": [2]})
         self.assertEqual(self.writes(1), [])
@@ -233,22 +241,34 @@ class HubCase(unittest.IsolatedAsyncioTestCase):
 class FakeBleClient(FakeClient):
     """Stands in for bleak.BleakClient: a cube sitting on cell (4, 3) with 80% battery."""
     made = []
+    fail_reads = 0      # how many upcoming reads raise
+    log = []            # (device, characteristic) of every write, across all clients
 
     def __init__(self, device, disconnected_callback=None):
         super().__init__()
         self.device, self.lost = device, disconnected_callback
+        self.is_connected = False
+        self.disconnects = 0
         FakeBleClient.made.append(self)
 
     async def connect(self):
-        pass
+        self.is_connected = True
 
     async def disconnect(self):
-        pass
+        self.is_connected = False
+        self.disconnects += 1
+
+    async def write_gatt_char(self, char, data, response=None):
+        await super().write_gatt_char(char, data, response)
+        FakeBleClient.log.append((self.device, char))
 
     async def start_notify(self, char, callback):
         pass
 
     async def read_gatt_char(self, char):
+        if FakeBleClient.fail_reads:
+            FakeBleClient.fail_reads -= 1
+            raise OSError("read failed")
         return bytes([80]) if char == P.BATTERY else struct.pack("<B6H", 0x01, 250, 250, 0, 250, 250, 0)
 
 
@@ -265,7 +285,7 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
                     raise result
                 return result
 
-        FakeBleClient.made = []
+        FakeBleClient.made, FakeBleClient.log, FakeBleClient.fail_reads = [], [], 0
         sys.modules["bleak"] = types.SimpleNamespace(BleakScanner=Scanner, BleakClient=FakeBleClient)
         self.addCleanup(sys.modules.pop, "bleak")
         self.addCleanup(setattr, Hub, "RETRY", Hub.RETRY)
@@ -274,8 +294,8 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
         task = asyncio.ensure_future(self.hub.keep_connected())
         self.addCleanup(task.cancel)
 
-    def seen(self, local_name):
-        return {"addr": ("device", types.SimpleNamespace(local_name=local_name))}
+    def seen(self, *local_names):
+        return {name: (name, types.SimpleNamespace(local_name=name)) for name in local_names}
 
     async def until(self, condition):
         for _ in range(200):
@@ -303,6 +323,34 @@ class ConnectionTest(unittest.IsolatedAsyncioTestCase):
         self.scans += [self.seen("toio-a1B")]
         await self.until(lambda: cube.connected)
         self.assertEqual(len(FakeBleClient.made), 2)
+        FakeBleClient.made[0].lost(FakeBleClient.made[0])   # a late callback from the old link
+        self.assertTrue(cube.connected)
+
+    async def test_failed_setup_releases_the_link_and_retries(self):
+        FakeBleClient.fail_reads = 1
+        self.scans += [self.seen("toio-a1B"), self.seen("toio-a1B")]
+        await self.until(lambda: self.hub.cubes[1].connected)
+        first, second = FakeBleClient.made
+        self.assertEqual((first.disconnects, second.disconnects), (1, 0))
+        self.assertIs(self.hub.cubes[1].client, second)
+
+    async def test_reconnects_when_the_link_died_silently(self):
+        self.scans += [self.seen("toio-a1B")]
+        cube = self.hub.cubes[1]
+        await self.until(lambda: cube.connected)
+        FakeBleClient.made[0].is_connected = False      # no disconnect callback arrived
+        self.scans += [self.seen("toio-a1B")]
+        await self.until(lambda: len(FakeBleClient.made) == 2 and cube.connected)
+
+    async def test_shutdown_stops_every_cube_before_anything_else(self):
+        hub = Hub(Mat(**GRID), [(1, "toio-a1B"), (2, "toio-c2D")])
+        self.scans += [self.seen("toio-a1B", "toio-c2D")]
+        task = asyncio.ensure_future(hub.keep_connected())
+        self.addCleanup(task.cancel)
+        await self.until(lambda: all(c.connected for c in hub.cubes.values()))
+        FakeBleClient.log.clear()
+        await hub.shutdown()
+        self.assertEqual([char for _, char in FakeBleClient.log], [P.MOTOR, P.MOTOR, P.LIGHT, P.LIGHT])
 
     async def test_shutdown_stops_and_releases_cubes(self):
         self.scans += [self.seen("toio-a1B")]

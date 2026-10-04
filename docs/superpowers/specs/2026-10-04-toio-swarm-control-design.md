@@ -1,7 +1,7 @@
 # toio 9 台制御 設計書
 
 - 日付: 2026-10-04
-- 状態: 設計のみ（未実装、実機未確認）
+- 状態: 実装済み（単体テスト通過、実機未確認）。コマンド仕様は README を正とする
 
 ## 1. 目的
 
@@ -82,8 +82,11 @@ client/
   toio.py            CLI 兼ライブラリ。robot.py と同じ流儀で、標準ライブラリのみ
   toio_hub.py        常駐ハブ。uv のスクリプトメタデータで bleak を宣言（presenter.py と同じ方式）
   toio_protocol.py   バイト列の組み立てと解釈。純粋関数のみで BLE に依存しない
+  toio_field.py      マット範囲、マスと座標の変換、目標の検査。純粋関数のみ
+  toio_spike.py      9 台同時接続の検証スクリプト
   toio_config.json   マット範囲、キューブ名と番号の対応（git 管理する）
-  test_toio.py       toio_protocol と目標検査の単体テスト
+  test_toio.py       toio_protocol、toio_field、toio.py の単体テスト
+  test_toio_hub.py   ハブのコマンド処理、設定読み込み、HTTP の単体テスト
 ```
 
 ## 4. モジュール

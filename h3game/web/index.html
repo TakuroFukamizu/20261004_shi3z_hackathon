@@ -174,9 +174,10 @@ let last=performance.now();
 function frame(now){const dt=Math.min(0.05,(now-last)/1000);last=now;
  const inp=readInput();
  if(phase==='setup'){if(swayT>0)swayT-=dt;renderSetup(inp)}
- else{const m=Game.update(dt,inp)||{};for(const a of AX)target[a]=clamp(+m[a]||0);Game.draw(cx,W,H);
+ let smooth=0.12;
+ else{const m=Game.update(dt,inp)||{};smooth=m.smooth||0.12;for(const a of AX)target[a]=clamp(+m[a]||0);Game.draw(cx,W,H);
   $('hud').textContent=(st.connected?'● H3 接続中':'● H3 未接続')+(Mic.ok()?'　● マイク':'　× マイク')+'　Esc: 設定に戻る'}
- const f=1-Math.pow(1-0.12,dt*60);for(const a of AX)cur[a]+=(target[a]-cur[a])*f;   // 急な動きをならす
+ const f=1-Math.pow(1-smooth,dt*60);for(const a of AX)cur[a]+=(target[a]-cur[a])*f;   // 急な動きをならす
  if(phase==='setup')renderSeat();
  requestAnimationFrame(frame)}
 Mic.init();addEventListener('pointerdown',()=>Mic.resume());

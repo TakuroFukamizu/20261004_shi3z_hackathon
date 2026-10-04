@@ -25,22 +25,23 @@
   enter(){st='calm';t=0;got=ITEMS.map(()=>false);gotAt=ITEMS.map(()=>-9);rev=-1;hit=-9;power=0;heard=''},
   update(dt,inp){t+=dt;const T=performance.now()/1000,s=Game.status;let want=0;
    if(st==='calm'){if(!Game.chiming()){st='quake';t=0}}
-   else if(st==='quake'){want=Math.min(1,0.25+t*0.4);if(t>=2.5){st='ask';t=0;Speech.start()}}
+   else if(st==='quake'){want=Math.min(1,0.4+t*0.5);if(t>=2.5){st='ask';t=0;Speech.start()}}
    else if(st==='ask'){heard=Speech.text();
     ITEMS.forEach((it,i)=>{if(it.re.test(heard)||inp.keys['Digit'+(i+1)])mark(i)});
-    const left=got.filter(g=>!g).length;want=0.45+left*0.08;   // 言えるほど揺れが弱まる
+    const left=got.filter(g=>!g).length;want=0.7+left*0.06;   // 言えるほど揺れが弱まる
     if(left===0&&T-Math.max(...gotAt)>0.8||t>=ASK_SEC){Speech.stop();st='review';t=REVIEW_SEC;rev=-1}}
-   else if(st==='review'){want=0.4;
+   else if(st==='review'){want=0.6;
     if(t>=REVIEW_SEC){t=0;rev=got.findIndex((g,i)=>!g&&i>rev);   // 次の言えなかった札
      if(rev<0){st='end';t=0;s.okashimochi={ok:got.filter(g=>g).length}}
      else{hit=T;s.hp=Math.max(1,s.hp-DAMAGE);Game.sfx.ng()}}}
-   else if(st==='end'){want=Math.max(0,0.3-t*0.15);if(t>=4)Game.go('boss')}
+   else if(st==='end'){want=Math.max(0,0.5-t*0.2);if(t>=4)Game.go('boss')}
    power+=(want-power)*Math.min(1,dt*3);Game.sfx.rumble(st==='ask'?power*0.25:power*0.8);   // 聞き取り中は地鳴りを小さく
    // 席: 横揺れ(左右・横振り)を大きくゆっくり、縦揺れ(前後)を細かく。外した瞬間はドンと突き上げる
    const jolt=Math.max(0,1-(T-hit)*3);
-   return {roll:power*(Math.sin(T*11)*0.7+Math.sin(T*17.3)*0.4)+jolt*Math.sin(T*40)*0.5,
-    yaw:power*(Math.sin(T*8.1+1)*0.6+Math.sin(T*13.7)*0.3),
-    pitch:power*(Math.sin(T*23)*0.3+Math.sin(T*31)*0.2)-jolt*0.8}},
+   // smooth: 土台のならしを弱めて、細かい揺れをそのまま席に伝える
+   return {smooth:0.45,roll:power*(Math.sin(T*12)*0.9+Math.sin(T*19.3)*0.5)+jolt*Math.sin(T*40)*0.6,
+    yaw:power*(Math.sin(T*9.1+1)*0.8+Math.sin(T*15.7)*0.5),
+    pitch:power*(Math.sin(T*25)*0.5+Math.sin(T*14)*0.4)-jolt*1.0}},
   draw(x,W,H){const u=H/100,T=performance.now()/1000,s=Game.status;
    const jolt=Math.max(0,1-(T-hit)*3),amp=(power*2.2+jolt*3)*u;
    x.fillStyle='#000';x.fillRect(0,0,W,H);

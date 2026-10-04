@@ -2,7 +2,7 @@
 // Game: シーンの切り替えと、シーンをまたいで持ち回るステータス。
 // index.html(土台)から毎フレーム呼ばれる。
 //   Game.scenes.名前 = {enter(), update(dt, inp), draw(x, W, H)}   ← 各 scene_*.js が登録する
-//     update は席の動き {pitch, roll, yaw}(-1..1) を返す
+//     update は席の動き {pitch, roll, yaw}(-1..1) を返す。smooth(0..1, 既定 0.12)を付けると動きのならし具合を変えられる
 //   Game.go('名前')   … シーンを切り替える
 //   Game.status       … {hp, hpMax, mp, mpMax, ...} シーン間で共有
 //   Game.chiming()    … シーン開始のチャイムが鳴っている間 true(この間はマイクを使わない)

@@ -31,6 +31,12 @@
 #define AP_SSID "stackchan-rover"
 #define AP_PASS "stackchan"
 #define MDNS_NAME "stackchan"
+// Realtime UDP channel for the PC hub
+#define RT_PORT 8790
+#define RT_TELEMETRY_MS 50
+#define RT_CLIENT_TIMEOUT_MS 3000
+#define RT_EVENT_RING 16
+#define RT_EVENT_SEND 8
 #define ROVER_LINK_TIMEOUT_MS 3000
 #define BEACON_INTERVAL_MS 300
 #define SPEAK_MAX_BYTES (2 * 1024 * 1024)

@@ -12,6 +12,7 @@ inline uint32_t rate        = 16000;
 inline int channels         = 1;
 inline uint32_t startMs     = 0;
 inline bool playing         = false;
+inline uint32_t clipId      = 0;  // increments for every clip started
 
 inline void stop()
 {
@@ -65,6 +66,7 @@ inline const char* playWav(uint8_t* data, size_t len)
     M5.Speaker.playRaw(pcm, samples, rate, channels == 2, 1, 0, true);
     startMs = millis();
     playing = true;
+    clipId++;
     return nullptr;
 }
 

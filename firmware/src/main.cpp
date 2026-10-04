@@ -1,5 +1,6 @@
 // StackChan (K151 body + Core2) on RoverC Pro: face, voice, head, wheels, gripper.
-// Control: JSON commands over HTTP (POST /cmd, POST /speak) or one JSON per line on USB serial.
+// Control: JSON commands over HTTP (POST /cmd, POST /speak), the UDP realtime channel (realtime.h,
+// used by client/stackchan_hub.py) or one JSON per line on USB serial.
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <Avatar.h>
@@ -150,7 +151,11 @@ static void handleCommand(JsonDocument& req, JsonDocument& res)
     } else if (!strcmp(cmd, "head")) {
         if (!head::servosFound) err = "head servos not found";
         else if (!head::calibrated) err = "head not calibrated: send {\"cmd\":\"calibrate\"} first";
-        else head::move(req["yaw"] | 0.0f, req["pitch"] | 45.0f, req["speed"] | 500);
+        else {
+            // sync=false keeps the spring's momentum: use it when streaming targets at a high rate
+            head::motion.setAutoAngleSyncEnabled(req["sync"] | true);
+            head::move(req["yaw"] | 0.0f, req["pitch"] | 45.0f, req["speed"] | 500);
+        }
     } else if (!strcmp(cmd, "calibrate")) {
         if (!head::servosFound) err = "head servos not found";
         else head::calibrate(!(req["default"] | false));
@@ -174,6 +179,8 @@ static void handleCommand(JsonDocument& req, JsonDocument& res)
     res["ok"] = (err == nullptr);
     if (err) res["error"] = err;
 }
+
+#include "realtime.h"
 
 // ---------------------------------------------------------------- HTTP
 
@@ -234,8 +241,10 @@ static esp_err_t onSpeak(httpd_req_t* r)
     Lock lock;
     const char* err = voice::playWav(data, r->content_len);
     if (err) return sendError(r, err);
+    rt::event("speech_start", voice::clipId);
     JsonDocument res;
     res["ok"]      = true;
+    res["id"]      = voice::clipId;
     res["seconds"] = (float)voice::samples / voice::channels / voice::rate;
     return sendJson(r, res);
 }
@@ -312,6 +321,7 @@ void setup()
 
     startWifi();
     startHttp();
+    rt::begin();
     say(ipText.c_str());
     M5.Speaker.tone(1320, 120);
     Serial.printf("[boot] rover=%d body=%d servos=%d head_calibrated=%d\n", rover::found, head::bodyFound,
@@ -353,14 +363,25 @@ void loop()
         static bool wasPlaying = false;
         float mouth            = voice::tick();
         if (voice::playing || wasPlaying) avatar.setMouthOpenRatio(mouth);
-        if (wasPlaying && !voice::playing) say("");  // clear the balloon when speech ends
+        if (wasPlaying && !voice::playing) {
+            say("");  // clear the balloon when speech ends
+            rt::event("speech_end", voice::clipId);
+        }
         wasPlaying = voice::playing;
+        static bool wasLinked = false;
+        bool linked           = roverLinked();
+        if (linked != wasLinked) rt::event(linked ? "rover_up" : "rover_down");
+        wasLinked = linked;
+        rt::tick();
     }
-    // Touch button A (left): emergency stop.
+    // Touch buttons under the screen are reported to the PC. A (left) is also an emergency stop.
     if (M5.BtnA.wasPressed()) {
+        rt::event("button_a");
         JsonDocument req, res;
         req["cmd"] = "stop";
         handleCommand(req, res);
     }
-    delay(30);
+    if (M5.BtnB.wasPressed()) rt::event("button_b");
+    if (M5.BtnC.wasPressed()) rt::event("button_c");
+    delay(10);
 }

@@ -6,7 +6,7 @@ M5Stack 公式 StackChan のボディ（K151）に **Core2** を載せ、**M5Sti
 PC ──HTTP / USB シリアル──▶ Core2（顔・声・首）──ESP-NOW──▶ StickC Plus（車輪・グリッパー）
 ```
 
-PC は Core2 にだけ話しかける。走行系のコマンドは Core2 が ESP-NOW で StickC Plus に転送する。
+PC は Core2 にだけ話しかける。turn 2 からは PC 上の常駐ハブ経由で操作する（下の「リアルタイム制御」）。走行系のコマンドは Core2 が ESP-NOW で StickC Plus に転送する。
 StickC Plus に Wi-Fi 設定は不要で、Core2 のビーコンを探してチャンネルを自動で合わせる。
 
 - `firmware/` Core2 用ファームウェア（PlatformIO）。顔、声、首、コマンド受付。
@@ -141,3 +141,50 @@ python3 client/dance/dance_03_boss_battle.py --robot-audio # 曲をロボット�
 `--lead-ms`（動きを早めに送る量、既定 60）、`--wav PATH`。
 曲は `res/` を自動で探す。見つからなければ `--wav` か環境変数 `DANCE_RES` で指定する。
 Ctrl-C で車輪・首・音声を止め、首を正面に戻す。首の校正が済んでいることが前提。
+
+## リアルタイム制御（turn 2）
+
+PC 上の常駐ハブ `client/stackchan_hub.py` が機体との UDP の経路を保ち、`127.0.0.1:8766` で JSON コマンドを受ける。
+toio ハブ（`127.0.0.1:8765`）と同じ形なので、シナリオ実行側は両方を同じやり方で扱える。
+
+```
+シナリオ / AI ──HTTP(localhost:8766)──▶ stackchan_hub.py ──UDP 8790──▶ Core2 ──ESP-NOW──▶ StickC Plus
+                                                           ◀─状態 20 回/秒 + イベント─
+                                                           ──HTTP /speak（音声だけ）──▶
+```
+
+- **コマンド:** 再送と重複排除付きで、どれも 1 回だけ実行される。
+- **状態通知:** 機体の首の角度、発話中か、走行系のリンク、電池、電波強度を毎秒 20 回送ってくる。
+- **イベント:** `speech_start` `speech_end` `button_a` `button_b` `button_c` `rover_up` `rover_down`。
+  画面下のボタン A は今までどおり非常停止も兼ねる。
+- **待ち合わせ:** `say` は喋り終わるまで、`head --wait` は首が着くまで、`wait` は指定のイベントまで返らない。
+- **首の連続制御:** `look` は最新の目標だけを毎秒 30 回まで送る。視線追従などに使う。
+- **走行:** `drive` はハブが短い区切りで送り直し続ける。パケットが落ちても止まらず、ハブが落ちれば 0.4 秒で止まる。
+
+```sh
+python3 client/stackchan_hub.py --host 192.168.100.29     # 常駐（Ctrl-C で機体を止めて終了）
+python3 client/stackchan.py status
+python3 client/stackchan.py say "こんにちは"
+python3 client/stackchan.py head 20 50 --wait
+python3 client/stackchan.py look 10 45
+python3 client/stackchan.py drive --y 40 --ms 1000 --wait
+python3 client/stackchan.py wait button_b --timeout 60
+python3 client/stackchan.py monitor                        # 状態とイベントを表示し続ける
+```
+
+```python
+from stackchan import StackChan
+sc = StackChan()                       # 失敗すると HubError を投げる
+sc.face("happy"); sc.say("こんにちは")  # 喋り終わってから返る
+sc.head(30, 50, wait=True)
+sc.wait("button_b", timeout=60)
+```
+
+テストは機体なしで動く（UDP を 20% 落とす疑似機体を相手にする）:
+
+```sh
+python3 client/test_stackchan_hub.py
+```
+
+実機での計測（会場 Wi-Fi、2026-10-04）: コマンドの往復は中央値 12 ms、状態通知は 50 ms ごと、
+`look` は呼び出しから機体到着まで中央値 13 ms（PC 内の疑似機体での値）。

@@ -43,9 +43,9 @@ SSID は `stackchan-rover`、パスワードは `stackchan`、アドレスは `1
 
 1. `python3 client/robot.py --host <IP> status` で `rover` `body` `servos` が `true` か見る。
    - `rover` が `false` なら StickC Plus の電源と RoverC の電源スイッチを確認する。
-   - `servos` が `false` なら `firmware/include/config.h` の `SERVO_TX_PIN` と `SERVO_RX_PIN` を入れ替える。
-2. 首を手で「正面・水平」に向け、`robot.py calibrate` を実行する。校正するまで首は動かない。
-   出荷時の既定値をそのまま使うなら `robot.py calibrate --default`。
+2. `robot.py calibrate --default` で首を有効にする（実機で既定の原点が合うことを確認済み）。
+   校正するまで首は脱力していて動かない。`robot.py head --yaw 0 --pitch 45` で正面を向けば完了。
+   ずれている場合だけ、首を手で正面・水平に保持したまま `robot.py calibrate` を実行する。
 3. `robot.py grip 0` と `robot.py grip 100` でグリッパーを確認する。
    動かなければ `robot.py servo 1 90` を試し、`config.h` の `GRIPPER_CH` と角度を直す。
 

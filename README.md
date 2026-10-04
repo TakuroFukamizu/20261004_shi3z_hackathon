@@ -109,3 +109,29 @@ uv run client/presenter.py --global           # どのアプリが前面でも�
 ```sh
 c++ -std=c++17 -Ifirmware/include firmware/test_host/test_mecanum.cpp -o /tmp/t && /tmp/t
 ```
+
+## 曲に合わせた固定振付（ライブ解析が間に合わない時の保険）
+
+`res/` の 3 曲それぞれに、BPM と尺に合わせて指示を送るスクリプトを用意してある。
+振付は `stackchan-dance-controller.html` の 8 カウント名（左へ探索、JUMP!、ATTACK! など）を
+そのまま使い、32 拍を 4 周する。周回ごとに動きが強くなり、車輪は往復を対にして元の位置に戻る。
+
+| スクリプト | 曲 | BPM | 尺 |
+|-----------|----|-----|----|
+| `client/dance/dance_01_chill_quest.py` | 01_chill_quest | 85 | 22.6 秒 |
+| `client/dance/dance_02_kawaii_8bit.py` | 02_kawaii_8bit_bonus | 120 | 16.0 秒 |
+| `client/dance/dance_03_boss_battle.py` | 03_boss_battle_edm | 140 | 13.7 秒 |
+
+```sh
+export ROBOT_HOST=192.168.100.29
+python3 client/dance/dance_03_boss_battle.py --dry-run     # 送る内容を表示するだけ
+python3 client/dance/dance_03_boss_battle.py               # Mac で曲を流しながら踊る
+python3 client/dance/dance_03_boss_battle.py --no-audio    # 曲は会場の音響で流す。開始と同時に Enter 代わりに起動
+python3 client/dance/dance_03_boss_battle.py --robot-audio # 曲をロボットのスピーカーで鳴らす
+```
+
+主なオプション: `--wait`（Enter で開始）、`--delay 秒`、`--power 0.7`（車輪を弱める）、
+`--no-drive`（首と顔だけ）、`--no-grip`、`--audio-latency`（Mac の音とずれる時に調整、既定 0.2 秒）、
+`--lead-ms`（動きを早めに送る量、既定 60）、`--wav PATH`。
+曲は `res/` を自動で探す。見つからなければ `--wav` か環境変数 `DANCE_RES` で指定する。
+Ctrl-C で車輪・首・音声を止め、首を正面に戻す。首の校正が済んでいることが前提。

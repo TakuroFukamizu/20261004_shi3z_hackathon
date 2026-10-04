@@ -2,6 +2,7 @@
 import unittest
 
 import toio_protocol as P
+from toio_field import Mat, check_targets
 
 
 class ProtocolTest(unittest.TestCase):
@@ -70,6 +71,60 @@ class ProtocolTest(unittest.TestCase):
     def test_parse_version(self):
         self.assertEqual(P.parse_version(bytes([0x81, 0x00]) + b"2.4.0"), "2.4.0")
         self.assertIsNone(P.parse_version(bytes([0x98, 0x00, 0x00])))
+
+
+GRID = dict(x_min=98, y_min=142, x_max=402, y_max=358, cols=7, rows=5)
+
+
+class FieldTest(unittest.TestCase):
+    def setUp(self):
+        self.mat = Mat(**GRID)
+
+    def test_cell_centers(self):
+        self.assertEqual(self.mat.cell_center(1, 1), (120, 164))
+        self.assertEqual(self.mat.cell_center(4, 3), (250, 250))
+        self.assertEqual(self.mat.cell_center(7, 5), (380, 336))
+
+    def test_cell_center_rejects_out_of_grid(self):
+        for cell in ((0, 1), (8, 1), (1, 0), (1, 6)):
+            with self.assertRaises(ValueError):
+                self.mat.cell_center(*cell)
+
+    def test_cell_center_needs_a_grid(self):
+        with self.assertRaises(ValueError):
+            Mat(98, 142, 402, 358).cell_center(1, 1)
+
+    def test_cell_of(self):
+        self.assertEqual(self.mat.cell_of(250, 250), (4, 3))
+        self.assertEqual(self.mat.cell_of(98, 142), (1, 1))
+        self.assertEqual(self.mat.cell_of(402, 358), (7, 5))   # the far edge belongs to the last cell
+        self.assertIsNone(self.mat.cell_of(97, 250))
+        self.assertIsNone(Mat(98, 142, 402, 358).cell_of(250, 250))
+
+    def test_every_cell_center_is_inside_the_margin(self):
+        for col in range(1, 8):
+            for row in range(1, 6):
+                self.assertTrue(self.mat.contains(*self.mat.cell_center(col, row)))
+
+    def test_contains_uses_margin(self):
+        self.assertTrue(self.mat.contains(113, 157))
+        self.assertFalse(self.mat.contains(112, 157))
+        self.assertFalse(self.mat.contains(250, 344))
+
+    def test_check_accepts_neighbouring_cells(self):
+        targets = {1: self.mat.cell_center(1, 1), 2: self.mat.cell_center(2, 1), 3: self.mat.cell_center(1, 2)}
+        self.assertIsNone(check_targets(self.mat, targets))
+
+    def test_check_rejects_target_outside_mat(self):
+        self.assertIn("outside the mat", check_targets(self.mat, {3: (50, 250)}))
+
+    def test_check_rejects_targets_too_close_to_each_other(self):
+        self.assertIn("cubes 1 and 2", check_targets(self.mat, {1: (250, 250), 2: (270, 250)}))
+
+    def test_check_rejects_target_near_an_obstacle(self):
+        err = check_targets(self.mat, {1: (250, 250)}, [("cube 5", 260, 260)])
+        self.assertIn("too close to cube 5", err)
+        self.assertIsNone(check_targets(self.mat, {1: (250, 250)}, [("cube 5", 285, 250)]))
 
 
 if __name__ == "__main__":

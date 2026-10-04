@@ -202,7 +202,7 @@ class H(BaseHTTPRequestHandler):
             if not peek: owner += 1
             my = owner if not peek else -1
             b = b.replace(b"__OWNER__", str(my).encode()); ctype = "text/html; charset=utf-8"
-        else: ctype = "application/javascript; charset=utf-8" if p.endswith(".js") else "application/octet-stream"
+        else: ctype = "application/javascript; charset=utf-8" if p.endswith(".js") else "audio/mpeg" if p.endswith(".mp3") else "application/octet-stream"
         self.send_response(200); self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(b))); self.end_headers()
         try: self.wfile.write(b)

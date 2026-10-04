@@ -68,9 +68,11 @@
 
 <script src="input.js"></script>
 <script src="mic.js"></script>
+<script src="speech.js"></script>
 <script src="game.js"></script>
 <script src="scene1_gate.js"></script>
-<script src="scene2_status.js"></script>
+<script src="scene2_quake.js"></script>
+<script src="scene3_boss.js"></script>
 <script>
 // ===== 土台: 入力をまとめる → (確認画面 or ゲーム) → 席へ送る =====
 const OWNER=(typeof __OWNER__==='undefined')?1:__OWNER__;   // bridge が番号に置き換える。-1 は「見るだけ」
@@ -100,7 +102,7 @@ function readInput(){const v=H3Input.values();const b1=H3Input.buttons('stick1')
   x2:v.stick2_x,y2:clamp(v.stick2_y+k('ArrowDown','KeyS')-k('ArrowUp','KeyW')),   // キーボードの前後は両方のスティックに効く
   twist2:v.stick2_twist,throttle2:v.stick2_throttle,
   rudder:clamp(v.rudder+k('KeyE')-k('KeyQ')),brakeL:v.brake_l,brakeR:v.brake_r,
-  fire:!!(b1[0]||keys.Space),fire2:!!b2[0],buttons1:b1,buttons2:b2,raw:v}}
+  fire:!!(b1[0]||keys.Space),fire2:!!b2[0],buttons1:b1,buttons2:b2,keys,raw:v}}
 
 // ---- 席: target に -1..1 を入れると、なめらかに追いかけて 30回/秒 で bridge に送る ----
 let target={pitch:0,roll:0,yaw:0},cur={pitch:0,roll:0,yaw:0},st={};
@@ -165,7 +167,7 @@ $('go').onclick=startGame;
 const cv=$('c'),cx=cv.getContext('2d');let W=0,H=0;
 function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight}addEventListener('resize',rs);
 function startGame(){if(phase==='play')return;Mic.resume();phase='play';swayT=0;live=false;document.body.classList.add('play');rs();Game.start()}
-function toSetup(){phase='setup';document.body.classList.remove('play');for(const a of AX)target[a]=0}
+function toSetup(){phase='setup';Game.stop();document.body.classList.remove('play');for(const a of AX)target[a]=0}
 
 // ---- 毎フレーム ----
 let last=performance.now();

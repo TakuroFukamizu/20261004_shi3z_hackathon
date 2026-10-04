@@ -23,15 +23,10 @@
  "comment": "生徒指導の先生が生徒に言い放つ一言(20文字以内、命令口調の熱血教師。例: 声が小さい！腹から出せ！ / よし！その意気だ！)"}`;
  let st,t,charge,pull,tries,rec,res,shake,hasMic;
 
- // Web Speech(ブラウザの音声認識)。AI が使えない時の言葉の聞き取り用
- let sr=null,srText='';
- function srStart(){srText='';const R=window.SpeechRecognition||window.webkitSpeechRecognition;if(!R)return;
-  try{sr=new R();sr.lang='ja-JP';sr.interimResults=true;sr.onresult=e=>{srText=Array.from(e.results).map(r=>r[0].transcript).join('')};sr.onerror=()=>{};sr.start()}catch(e){sr=null}}
- // 止めてから最後の結果が届くまで少し待つ
- function srStop(){return new Promise(res=>{if(!sr)return res();const done=()=>{sr=null;res()};sr.onend=done;setTimeout(done,1500);try{sr.stop()}catch(e){done()}})}
+ let srText='';
 
  async function judge(){
-  let a=null;await srStop();
+  let a=null;await Speech.stop();srText=Speech.text();
   try{const r=await fetch('/ai',{method:'POST',body:JSON.stringify({prompt:prompt(srText,rec),json:true,audio:rec.wav})});
    const txt=(await r.json()).text||'';const m=txt.match(/\{[\s\S]*\}/);if(m)a=JSON.parse(m[0])}catch(e){}
   const num=v=>Math.max(0,Math.min(100,Math.round(+v||0)));
@@ -55,14 +50,15 @@
    if(!hasMic)Mic.init().then(ok=>hasMic=ok);Mic.resume()},
   update(dt,inp){t+=dt;const m={pitch:0,roll:0,yaw:0};const T=performance.now()/1000;
    const two=!!H3Input.padFor('stick2');pull=two?Math.min(inp.y,inp.y2):inp.y;   // スティックが1本だけならそれで判定
-   if(st==='pull'){charge=Math.max(0,Math.min(1,charge+(pull>=PULL?dt/CHARGE_SEC:-dt*1.5)));
+   if(st==='pull'){if(Game.chiming())return m;   // チャイムが鳴り終わるまで待つ
+    charge=Math.max(0,Math.min(1,charge+(pull>=PULL?dt/CHARGE_SEC:-dt*1.5)));
     m.pitch=charge*0.5+Math.sin(T*45)*0.08*charge;m.roll=Math.sin(T*37)*0.06*charge;   // 引くほど席がのけぞって震える
-    if(charge>=1){tries++;if(!hasMic){noMic()}else{st='listen';t=0;Mic.start();srStart()}}}
+    if(charge>=1){tries++;if(!hasMic){noMic()}else{st='listen';t=0;Mic.start();Speech.start()}}}
    else if(st==='listen'){shake=Mic.level();m.pitch=0.5-shake*0.4;m.roll=Math.sin(T*50)*0.25*shake;m.yaw=Math.sin(T*31)*0.2*shake;   // 声で席が震える
     if(t>=LISTEN_SEC){rec=Mic.stop();st='judge';t=0;judge()}}
    else if(st==='judge'){m.pitch=0.2+Math.sin(T*3)*0.05}
    else if(st==='result'){
-    if(res.said){if(t>0.3&&t<1)m.pitch=-0.5;if(t>5||(t>1.5&&inp.fire))Game.go('status')}
+    if(res.said){if(t>0.3&&t<1)m.pitch=-0.5;if(t>5||(t>1.5&&inp.fire))Game.go('quake')}
     else{m.roll=Math.sin(T*25)*0.3*Math.max(0,1-t);if(t>3){st='pull';t=0;charge=0}}}
    return m},
   draw(x,W,H){const u=H/100,T=performance.now()/1000;

@@ -129,6 +129,7 @@ class HubCase(unittest.IsolatedAsyncioTestCase):
             {"id": 1, "col": 3, "row": 3}, {"id": 2, "col": 4, "row": 3}, {"id": 3, "x": 300, "y": 300}]})
         self.answer(1, 0x00)
         self.answer(2, 0x00)
+        self.hub.cubes[3].on_id(None, bytes([0x03]))    # cube 3 really left the mat
         self.answer(3, 0x02)
         res = await task
         self.assertEqual(res["results"], {"1": "reached", "2": "reached", "3": "off_mat"})
@@ -192,6 +193,38 @@ class HubCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await task)["results"], {"1": "interrupted"})
         for cid in (1, 2, 3):
             self.assertEqual(self.writes(cid)[-1], (P.MOTOR, P.STOP))
+
+    def move_writes(self, cid):
+        return [d for ch, d in self.writes(cid) if ch == P.MOTOR and d[0] == 0x03]
+
+    async def test_move_retries_when_the_mat_is_lost_for_a_moment(self):
+        self.addCleanup(setattr, Cube, "SETTLE", Cube.SETTLE)
+        Cube.SETTLE = 0
+        task = await self.start({"cmd": "move", "id": 1, "col": 4, "row": 3})
+        self.answer(1, 0x02)        # the cube says it lost the mat, but its sensor still reads a position
+        for _ in range(10):
+            await asyncio.sleep(0)
+        self.assertEqual(len(self.move_writes(1)), 2)
+        self.assertTrue(self.hub.cubes[1].busy)
+        self.answer(1, 0x00)
+        self.assertEqual((await task)["results"], {"1": "reached"})
+
+    async def test_move_gives_up_when_the_cube_left_the_mat(self):
+        task = await self.start({"cmd": "move", "id": 1, "col": 4, "row": 3})
+        self.hub.cubes[1].on_id(None, bytes([0x03]))
+        self.answer(1, 0x02)
+        self.assertEqual((await asyncio.wait_for(task, 2))["results"], {"1": "off_mat"})
+        self.assertEqual(len(self.move_writes(1)), 1)
+
+    async def test_stop_cancels_a_pending_retry(self):
+        task = await self.start({"cmd": "move", "id": 1, "col": 4, "row": 3})
+        self.answer(1, 0x02)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        await self.hub.handle({"cmd": "stop", "id": 1})
+        self.assertEqual((await asyncio.wait_for(task, 2))["results"], {"1": "interrupted"})
+        self.assertEqual(len(self.move_writes(1)), 1)
+        self.assertFalse(self.hub.cubes[1].busy)
 
     async def test_second_move_interrupts_the_first(self):
         first = await self.start({"cmd": "move", "id": 1, "col": 4, "row": 3})

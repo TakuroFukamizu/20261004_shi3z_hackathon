@@ -32,7 +32,9 @@ class CmdError(Exception):
 
 
 class Cube:
-    GRACE = 2   # seconds to wait for a move result beyond the cube's own timeout
+    GRACE = 2       # seconds to wait for a move result beyond the cube's own timeout
+    RETRIES = 2     # a turning cube sometimes loses the mat for a moment and gives up; send it again
+    SETTLE = 0.3    # seconds to let the sensor find the mat again before a retry
 
     def __init__(self, cid, name):
         self.id, self.name = cid, name
@@ -43,13 +45,14 @@ class Cube:
         self.battery = None
         self.target = None          # (x, y) of the move in progress
         self.last_result = None
-        self._seq = 0
+        self._seq = 0               # control id of the last command sent
+        self._gen = 0               # bumped by every new move and every stop, so a superseded move gives up
         self._waiters = {}          # control id -> future resolved with the result name
         self._lock = asyncio.Lock()
 
     @property
     def busy(self):
-        return bool(self._waiters)
+        return self.target is not None
 
     async def write(self, char, data):
         async with self._lock:
@@ -76,6 +79,7 @@ class Cube:
     def on_disconnect(self):
         self.connected = False
         self.on_mat = False
+        self._gen += 1
         self._finish_all("disconnected")
 
     def _finish(self, control_id, result):
@@ -90,26 +94,44 @@ class Cube:
     async def move(self, x, y, angle=None, speed=80, timeout=10):
         """Send the cube to (x, y) and wait for its answer. Returns a result name, never raises."""
         self._finish_all("interrupted")     # a newer move replaces the one in progress
-        self._seq = (self._seq + 1) % 256
-        control_id = self._seq
-        fut = asyncio.get_running_loop().create_future()
-        self._waiters[control_id] = fut
+        self._gen += 1
+        gen = self._gen
         self.target = (x, y)
         try:
-            await self.write(P.MOTOR, P.move_to(control_id, x, y, angle, speed, timeout))
-            result = await asyncio.wait_for(fut, timeout + self.GRACE)
-        except asyncio.TimeoutError:
-            result = "no_response"
-        except Exception:
-            result = "write_failed"
+            for attempt in range(self.RETRIES + 1):
+                result = await self._move_once(x, y, angle, speed, timeout)
+                if result != "off_mat" or attempt == self.RETRIES:
+                    break
+                await asyncio.sleep(self.SETTLE)
+                if self._gen != gen:
+                    result = "interrupted"
+                    break
+                if not self.on_mat:
+                    break
         finally:
-            self._waiters.pop(control_id, None)
-            if self._seq == control_id:
+            if self._gen == gen:
                 self.target = None
         self.last_result = result
         return result
 
+    async def _move_once(self, x, y, angle, speed, timeout):
+        self._seq = (self._seq + 1) % 256
+        control_id = self._seq
+        fut = asyncio.get_running_loop().create_future()
+        self._waiters[control_id] = fut
+        try:
+            await self.write(P.MOTOR, P.move_to(control_id, x, y, angle, speed, timeout))
+            return await asyncio.wait_for(fut, timeout + self.GRACE)
+        except asyncio.TimeoutError:
+            return "no_response"
+        except Exception:
+            return "write_failed"
+        finally:
+            self._waiters.pop(control_id, None)
+
     async def stop(self):
+        self._gen += 1
+        self.target = None
         self._finish_all("interrupted")
         await self.write(P.MOTOR, P.STOP)
 

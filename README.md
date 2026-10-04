@@ -1,15 +1,18 @@
 # StackChan + RoverC Pro 制御
 
-M5Stack 公式 StackChan のボディ（K151）に **Core2** を載せ、RoverC Pro に乗せた機体を PC から動かす。
+M5Stack 公式 StackChan のボディ（K151）に **Core2** を載せ、**M5StickC Plus** が制御する RoverC Pro に乗せた機体を PC から動かす。
 
-- `firmware/` Core2 用ファームウェア（PlatformIO）。顔、声、首、車輪、グリッパー。
+```
+PC ──HTTP / USB シリアル──▶ Core2（顔・声・首）──ESP-NOW──▶ StickC Plus（車輪・グリッパー）
+```
+
+PC は Core2 にだけ話しかける。走行系のコマンドは Core2 が ESP-NOW で StickC Plus に転送する。
+StickC Plus に Wi-Fi 設定は不要で、Core2 のビーコンを探してチャンネルを自動で合わせる。
+
+- `firmware/` Core2 用ファームウェア（PlatformIO）。顔、声、首、コマンド受付。
+- `firmware-rover/` M5StickC Plus 用ファームウェア。車輪、グリッパー。
 - `client/robot.py` PC 用 CLI 兼 Python ライブラリ（標準ライブラリのみ）。
 - `docs/superpowers/specs/` 設計書。
-
-## 配線
-
-RoverC Pro を Core2 の Port A（赤い Grove、G32/G33）に繋ぐ。
-Core2 と RoverC の両方が 5V を出す可能性があるので、初めて繋ぐ場合は 5V 線を確認すること。
 
 ## 書き込み
 
@@ -18,8 +21,18 @@ pioarduino は Python 3.10 以上が必要なので `uvx` 経由で実行する�
 ```sh
 cd firmware
 cp include/secrets.h.example include/secrets.h   # Wi-Fi を書く（省略可）
-uvx --python 3.12 platformio run -t upload
+uvx --python 3.12 platformio run -t upload --upload-port /dev/cu.usbserial-XXXX   # Core2
 uvx --python 3.12 platformio device monitor
+
+cd ../firmware-rover
+uvx --python 3.12 platformio run -t upload --upload-port /dev/cu.usbserial-YYYY   # StickC Plus
+```
+
+StickC Plus の画面は、Core2 と繋がると緑、探索中は黒、RoverC が見つからないと赤になる。
+書き込み前の元ファームウェアは `backup/`（git 管理外）に保存してある。戻すには:
+
+```sh
+uvx --python 3.12 esptool --port <port> write-flash 0 backup/<file>.bin
 ```
 
 `secrets.h` が無い、または接続できない場合は、機体がアクセスポイントになる。
@@ -29,6 +42,7 @@ SSID は `stackchan-rover`、パスワードは `stackchan`、アドレスは `1
 ## 初回の確認手順
 
 1. `python3 client/robot.py --host <IP> status` で `rover` `body` `servos` が `true` か見る。
+   - `rover` が `false` なら StickC Plus の電源と RoverC の電源スイッチを確認する。
    - `servos` が `false` なら `firmware/include/config.h` の `SERVO_TX_PIN` と `SERVO_RX_PIN` を入れ替える。
 2. 首を手で「正面・水平」に向け、`robot.py calibrate` を実行する。校正するまで首は動かない。
    出荷時の既定値をそのまま使うなら `robot.py calibrate --default`。
@@ -57,9 +71,22 @@ r = Robot("192.168.4.1")
 r.face("happy"); r.say("こんにちは"); r.drive(y=50, ms=1000)
 ```
 
+## プレゼンター（Canon PR7-HY）で操作する
+
+リモコンはキーボードとして見えるので、キー入力を機体のコマンドに変換する。
+ボタンと動作の対応は `client/presenter.py` 冒頭の `BINDINGS` で変える。
+
+```sh
+uv run client/presenter.py --global --learn   # 各ボタンが送るキー名を表示する
+python3 client/presenter.py --dry-run         # 送るコマンドを表示するだけ
+python3 client/presenter.py                   # 機体に送る（このターミナルが前面のときだけ）
+uv run client/presenter.py --global           # どのアプリが前面でも拾う（入力監視の許可が必要）
+```
+
 ## コマンド
 
 `POST /cmd` に JSON を送る。USB シリアル（115200 bps）に 1 行 1 JSON でも同じ。
+`drive` `grip` `servo` `stop` は StickC Plus の USB シリアルに直接送ることもできる。
 
 | cmd | 引数 |
 |-----|------|

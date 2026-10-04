@@ -7,6 +7,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <esp_http_server.h>
+#include <esp_now.h>
 #include "config.h"
 #include "head.h"
 #include "rover.h"
@@ -19,6 +20,73 @@ static m5avatar::Avatar avatar;
 static SemaphoreHandle_t gLock;  // serialises command execution and the loop tick
 static String ipText = "-";
 static String speechText;        // must outlive avatar.setSpeechText()
+
+// ---- link to the RoverC's own M5StickC Plus (firmware-rover) over ESP-NOW broadcast ----
+static const uint8_t kBroadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+static volatile uint32_t roverSeenMs = 0;
+static volatile bool roverSeen       = false;
+static bool espNowReady              = false;
+
+static bool roverLinked() { return roverSeen && millis() - roverSeenMs < ROVER_LINK_TIMEOUT_MS; }
+
+static void onEspNowRecv(const esp_now_recv_info_t*, const uint8_t* data, int len)
+{
+    static const char tag[] = "{\"rover\"";
+    if (len >= (int)sizeof(tag) - 1 && !memcmp(data, tag, sizeof(tag) - 1)) {  // heartbeat from the rover
+        roverSeenMs = millis();
+        roverSeen   = true;
+    }
+}
+
+static void startEspNow()
+{
+    if (esp_now_init() != ESP_OK) {
+        Serial.println("[espnow] init failed");
+        return;
+    }
+    esp_now_peer_info_t peer = {};
+    memcpy(peer.peer_addr, kBroadcast, 6);
+    peer.channel = 0;  // current channel
+    peer.ifidx   = (WiFi.getMode() == WIFI_AP) ? WIFI_IF_AP : WIFI_IF_STA;
+    esp_now_add_peer(&peer);
+    esp_now_register_recv_cb(onEspNowRecv);
+    espNowReady = true;
+    Serial.printf("[espnow] ready on channel %d\n", WiFi.channel());
+}
+
+static bool espNowSend(const char* text)
+{
+    return espNowReady && esp_now_send(kBroadcast, (const uint8_t*)text, strlen(text)) == ESP_OK;
+}
+
+// Beacon so the rover can find our Wi-Fi channel and knows we are alive.
+static void roverLinkTick()
+{
+    static uint32_t last = 0;
+    if (millis() - last >= BEACON_INTERVAL_MS) {
+        last = millis();
+        espNowSend("{\"core2\":true}");
+    }
+}
+
+// Wheel/gripper commands go to the directly wired RoverC if present, else to the StickC rover.
+static const char* roverCommand(JsonDocument& req)
+{
+    const char* cmd = req["cmd"] | "";
+    if (rover::found) {
+        bool ok = true;
+        if (!strcmp(cmd, "drive")) ok = rover::drive(req["x"] | 0, req["y"] | 0, req["rot"] | 0, req["ms"] | DRIVE_DEFAULT_MS);
+        else if (!strcmp(cmd, "grip")) ok = rover::grip(req["percent"] | 0);
+        else if (!strcmp(cmd, "servo")) ok = rover::servo(req["ch"] | 0, req["angle"] | 90);
+        else if (!strcmp(cmd, "stop")) ok = rover::stop();
+        return ok ? nullptr : "rover not responding";
+    }
+    if (!roverLinked()) return "rover not connected (no heartbeat from the StickC)";
+    String out;
+    serializeJson(req, out);
+    if (out.length() > 240) return "command too long";
+    return espNowSend(out.c_str()) ? nullptr : "esp-now send failed";
+}
 
 struct Lock {
     Lock() { xSemaphoreTakeRecursive(gLock, portMAX_DELAY); }
@@ -50,7 +118,9 @@ static bool setExpression(const char* name)
 static void fillStatus(JsonDocument& res)
 {
     res["ip"]              = ipText;
-    res["rover"]           = rover::found;
+    res["rover"]           = rover::found || roverLinked();
+    res["rover_link"]      = rover::found ? "wired" : (roverLinked() ? "esp-now" : "none");
+    res["wifi_channel"]    = WiFi.channel();
     res["body"]            = head::bodyFound;
     res["servos"]          = head::servosFound;
     res["head_calibrated"] = head::calibrated;
@@ -87,14 +157,10 @@ static void handleCommand(JsonDocument& req, JsonDocument& res)
     } else if (!strcmp(cmd, "torque")) {
         if (!head::servosFound) err = "head servos not found";
         else head::motion.setTorqueEnabled(req["on"] | false);
-    } else if (!strcmp(cmd, "drive")) {
-        if (!rover::drive(req["x"] | 0, req["y"] | 0, req["rot"] | 0, req["ms"] | DRIVE_DEFAULT_MS)) err = "rover not responding";
-    } else if (!strcmp(cmd, "grip")) {
-        if (!rover::grip(req["percent"] | 0)) err = "rover not responding";
-    } else if (!strcmp(cmd, "servo")) {
-        if (!rover::servo(req["ch"] | 0, req["angle"] | 90)) err = "rover not responding";
+    } else if (!strcmp(cmd, "drive") || !strcmp(cmd, "grip") || !strcmp(cmd, "servo")) {
+        err = roverCommand(req);
     } else if (!strcmp(cmd, "stop")) {
-        rover::stop();
+        roverCommand(req);
         voice::stop();
         if (head::servosFound) head::motion.stop();
     } else if (!strcmp(cmd, "volume")) {
@@ -215,11 +281,13 @@ static void startWifi()
     }
 #endif
     if (ipText == "-") {
+        WiFi.disconnect(true);
         WiFi.mode(WIFI_AP);
         WiFi.softAP(AP_SSID, AP_PASS);
         ipText = WiFi.softAPIP().toString();
         Serial.printf("[wifi] access point \"%s\" password \"%s\"\n", AP_SSID, AP_PASS);
     }
+    startEspNow();
     MDNS.begin(MDNS_NAME);
     Serial.printf("[wifi] http://%s/  (http://%s.local/)\n", ipText.c_str(), MDNS_NAME);
 }
@@ -281,6 +349,7 @@ void loop()
     {
         Lock lock;
         rover::tick();
+        roverLinkTick();
         static bool wasPlaying = false;
         float mouth            = voice::tick();
         if (voice::playing || wasPlaying) avatar.setMouthOpenRatio(mouth);

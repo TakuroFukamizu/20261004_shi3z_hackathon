@@ -1,6 +1,7 @@
 # StackChan + RoverC Pro 制御ソフト基盤 設計書
 
 - 日付: 2026-10-04
+- 追記: RoverC Pro は M5StickC Plus が制御する構成と判明。Core2 から ESP-NOW で転送する方式に変更した。構成とコマンド仕様は README を正とする
 - 状態: 実装済み（Core2 向けビルド確認済み、実機未確認）。実際のコマンド仕様は README を正とする
 
 ## 1. 目的

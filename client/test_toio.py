@@ -32,8 +32,13 @@ class ProtocolTest(unittest.TestCase):
 
     def test_move_to_matches_spec_example(self):
         # spec: control id 0, timeout 5 s, max speed 80, x 700, y 386, angle 90
-        self.assertEqual(P.move_to(0, 700, 386, angle=90, speed=80, timeout=5),
+        self.assertEqual(P.move_to(0, 700, 386, angle=90, speed=80, timeout=5, turn_first=False),
                          bytes.fromhex("03000500500000" "bc02" "8201" "5a00"))
+
+    def test_move_to_turns_on_the_spot_before_driving_by_default(self):
+        # movement type 2: with cubes one cell apart, an arc would sweep into the neighbours
+        self.assertEqual(P.move_to(0, 250, 250)[3], 2)
+        self.assertEqual(P.move_to(0, 250, 250, turn_first=False)[3], 0)
 
     def test_move_to_without_angle_does_not_rotate(self):
         data = P.move_to(7, 250, 250)

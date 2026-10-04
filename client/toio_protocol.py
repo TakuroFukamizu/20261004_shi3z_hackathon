@@ -46,8 +46,9 @@ def drive(left, right, ms):
     return bytes([0x02, 0x01, ld, ls, 0x02, rd, rs, ms // 10])
 
 
-def move_to(control_id, x, y, angle=None, speed=80, timeout=10):
-    """Drive to mat coordinates; the cube steers itself and answers with parse_move_result()."""
+def move_to(control_id, x, y, angle=None, speed=80, timeout=10, turn_first=True):
+    """Drive to mat coordinates; the cube steers itself and answers with parse_move_result().
+    turn_first: turn on the spot, then drive straight (False: steer while driving, in an arc)."""
     x, y, speed, timeout = int(x), int(y), int(speed), int(timeout)
     if not (0 <= x < 0xFFFF and 0 <= y < 0xFFFF):
         raise ValueError("x and y must be 0..65534")
@@ -56,7 +57,8 @@ def move_to(control_id, x, y, angle=None, speed=80, timeout=10):
     if not 1 <= timeout <= 255:
         raise ValueError("timeout must be 1..255")
     theta = _NO_ANGLE if angle is None else int(angle) % 360
-    return struct.pack("<7B3H", 0x03, control_id & 0xFF, timeout, 0x00, speed, 0x00, 0x00, x, y, theta)
+    return struct.pack("<7B3H", 0x03, control_id & 0xFF, timeout,
+                       0x02 if turn_first else 0x00, speed, 0x00, 0x00, x, y, theta)
 
 
 def led(r, g, b, ms=0):

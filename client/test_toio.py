@@ -1,6 +1,13 @@
 """Tests for toio_protocol, toio_field and the toio.py client. Run: cd client && python3 -m unittest test_toio -v"""
+import contextlib
+import io
+import json
+import socket
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
+import toio
 import toio_protocol as P
 from toio_field import Mat, check_targets
 
@@ -125,6 +132,102 @@ class FieldTest(unittest.TestCase):
         err = check_targets(self.mat, {1: (250, 250)}, [("cube 5", 260, 260)])
         self.assertIn("too close to cube 5", err)
         self.assertIsNone(check_targets(self.mat, {1: (250, 250)}, [("cube 5", 285, 250)]))
+
+
+class ClientTest(unittest.TestCase):
+    def setUp(self):
+        self.requests = []
+        self.reply = (200, {"ok": True})
+        case = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                case.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                code, body = case.reply
+                data = json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def run_cli(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = toio.main(["--port", str(self.port)] + list(args))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_cli_commands(self):
+        cases = [
+            (["status"], {"cmd": "status"}),
+            (["move", "3", "--cell", "4,2"], {"cmd": "move", "id": 3, "col": 4, "row": 2}),
+            (["move", "3", "--xy", "250,250", "--angle", "90", "--speed", "50", "--no-wait"],
+             {"cmd": "move", "id": 3, "x": 250, "y": 250, "angle": 90, "speed": 50, "wait": False}),
+            (["move-all", "1:1,1", "2:2,1"],
+             {"cmd": "move_all", "targets": [{"id": 1, "col": 1, "row": 1}, {"id": 2, "col": 2, "row": 1}]}),
+            (["move-all", "--xy", "1:120,164", "--timeout", "5"],
+             {"cmd": "move_all", "targets": [{"id": 1, "x": 120, "y": 164}], "timeout": 5}),
+            (["drive", "all", "--left", "50", "--right", "-50", "--ms", "300"],
+             {"cmd": "drive", "id": "all", "left": 50, "right": -50, "ms": 300}),
+            (["led", "all", "0", "255", "0"], {"cmd": "led", "id": "all", "r": 0, "g": 255, "b": 0}),
+            (["sound", "2", "6"], {"cmd": "sound", "id": 2, "effect": 6}),
+            (["identify", "5"], {"cmd": "identify", "id": 5}),
+            (["stop"], {"cmd": "stop"}),
+            (["stop", "4"], {"cmd": "stop", "id": 4}),
+        ]
+        for args, expected in cases:
+            code, out, _ = self.run_cli(*args)
+            self.assertEqual(code, 0, args)
+            self.assertEqual(self.requests[-1], expected, args)
+            self.assertEqual(json.loads(out), {"ok": True}, args)
+
+    def test_cli_exit_code_follows_hub_error(self):
+        self.reply = (400, {"ok": False, "error": "cube 3 is not connected"})
+        code, out, _ = self.run_cli("identify", "3")
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(out)["error"], "cube 3 is not connected")
+
+    def test_cli_rejects_bad_arguments_before_sending(self):
+        for args in (["move", "3"], ["move", "3", "--cell", "4,2", "--xy", "1,1"],
+                     ["move", "3", "--cell", "4"], ["move-all", "1-1,1"], ["led", "x", "0", "0", "0"]):
+            with self.assertRaises(SystemExit):
+                self.run_cli(*args)
+        self.assertEqual(self.requests, [])
+
+    def test_unreachable_hub(self):
+        with socket.socket() as s:      # a port nothing listens on
+            s.bind(("127.0.0.1", 0))
+            free_port = s.getsockname()[1]
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = toio.main(["--port", str(free_port), "status"])
+        self.assertEqual(code, 2)
+        self.assertIn("cannot reach the toio hub", err.getvalue())
+        self.assertIn("toio_hub.py", err.getvalue())
+
+    def test_library(self):
+        t = toio.Toio(port=self.port)
+        t.move(3, cell=(4, 2))
+        self.assertEqual(self.requests[-1], {"cmd": "move", "id": 3, "col": 4, "row": 2})
+        t.move(3, xy=(250, 250), angle=90)
+        self.assertEqual(self.requests[-1], {"cmd": "move", "id": 3, "x": 250, "y": 250, "angle": 90})
+        t.move_all({1: (1, 1), 2: (2, 1)}, wait=False)
+        self.assertEqual(self.requests[-1], {"cmd": "move_all", "wait": False, "targets": [
+            {"id": 1, "col": 1, "row": 1}, {"id": 2, "col": 2, "row": 1}]})
+        t.stop()
+        self.assertEqual(self.requests[-1], {"cmd": "stop"})
+        with self.assertRaises(ValueError):
+            t.move(3)
+        with self.assertRaises(ValueError):
+            t.move(3, cell=(1, 1), xy=(120, 164))
 
 
 if __name__ == "__main__":

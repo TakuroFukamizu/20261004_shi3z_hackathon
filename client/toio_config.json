@@ -1,0 +1,48 @@
+{
+  "mat": {
+    "x_min": 98,
+    "y_min": 142,
+    "x_max": 402,
+    "y_max": 358,
+    "cols": 7,
+    "rows": 5
+  },
+  "cubes": [
+    {
+      "name": "toio-15i",
+      "id": 1
+    },
+    {
+      "name": "toio-40j",
+      "id": 2
+    },
+    {
+      "name": "toio-93R",
+      "id": 3
+    },
+    {
+      "name": "toio-a97",
+      "id": 4
+    },
+    {
+      "name": "toio-83T",
+      "id": 5
+    },
+    {
+      "name": "toio-e4T",
+      "id": 6
+    },
+    {
+      "name": "toio-f48",
+      "id": 7
+    },
+    {
+      "name": "toio-N1H",
+      "id": 8
+    },
+    {
+      "name": "toio-C0D",
+      "id": 9
+    }
+  ]
+}

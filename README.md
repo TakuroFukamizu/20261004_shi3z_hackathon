@@ -104,10 +104,101 @@ uv run client/presenter.py --global           # どのアプリが前面でも�
 
 `POST /speak` に 16bit PCM の WAV（2 MB まで）を送ると再生する。
 
+## toio を 9 台動かす
+
+StackChan とは別系統。Mac が BLE で toio コア キューブに直接つなぐ（Core2 は経由しない）。
+
+```
+AI / スクリプト ──HTTP (127.0.0.1:8765)──▶ toio ハブ（常駐）──BLE──▶ キューブ 1〜9
+```
+
+- `client/toio_hub.py` 常駐ハブ。接続を保持し、`POST /cmd` で JSON コマンドを受ける。
+- `client/toio.py` CLI 兼 Python ライブラリ（標準ライブラリのみ）。
+- `client/toio_config.json` マットの範囲と、キューブ名と番号の対応。
+
+マットは toio 開発用プレイマットの表面（7 × 5 マスの面）を使う。座標は左上 (98, 142)、右下 (402, 358)。
+マスは左から 1〜7 列、上から 1〜5 行。
+
+### 初回の準備
+
+近くに他人の toio があっても触らないよう、名前（`toio-XXX` の末尾 3 文字）を指定した台にしか接続しない。
+
+1. 自分のキューブの名前を調べる。接続はせず、電波の強い順（近い順の目安）に一覧を出す。
+   初回は macOS が Bluetooth の利用許可を求める。
+
+   ```sh
+   uv run client/toio_hub.py --scan
+   ```
+
+2. 全台の電源を入れてマットに載せ、接続を確かめる。
+
+   ```sh
+   uv run client/toio_spike.py --names a1B,c2D --minutes 1 --move
+   ```
+
+   最後に `PASS` と出れば、この Mac で指定した全台を同時に扱える。
+3. 番号を割り当てる。1 台ずつ白く光るので、その台に付ける番号（1〜9）を入力し、番号シールを貼る。
+
+   ```sh
+   uv run client/toio_hub.py --assign --names a1B,c2D
+   ```
+
+### 使い方
+
+```sh
+uv run client/toio_hub.py                          # ハブを起動（別のターミナルで動かしたままにする）
+python3 client/toio.py status                      # 全台の接続、位置、マス、電池
+python3 client/toio.py move 3 --cell 4,2           # 3 番を 4 列 2 行のマスへ。到着まで待つ
+python3 client/toio.py move 3 --xy 250,250 --angle 90
+python3 client/toio.py move-all 1:1,1 2:2,1 3:3,1  # 番号:列,行。まとめて動かす
+python3 client/toio.py drive 3 --left 50 --right 50 --ms 500   # マットの外でも使える
+python3 client/toio.py led all 0 255 0
+python3 client/toio.py identify 5                  # 5 番を点滅させて鳴らす
+python3 client/toio.py stop                        # 全台停止
+```
+
+Python から:
+
+```python
+from toio import Toio
+t = Toio()
+t.move(3, cell=(4, 2))
+t.move_all({1: (1, 1), 2: (2, 1)})
+```
+
+### コマンド
+
+`POST http://127.0.0.1:8765/cmd` に JSON を送る。応答は `{"ok":true,...}` か `{"ok":false,"error":"..."}`。
+
+| cmd | 引数 |
+|-----|------|
+| `status` | なし |
+| `move` | `id`、`col` `row` または `x` `y`、任意で `angle` `speed`（10〜115、既定 80）`timeout`（秒、既定 10）`wait` |
+| `move_all` | `targets`: `[{id, col, row}]` または `[{id, x, y}]`、任意で `speed` `timeout` `wait` |
+| `drive` | `id`、`left` `right` -115〜115、`ms` 10〜2550 |
+| `led` | `id`、`r` `g` `b` 0〜255、任意で `ms` |
+| `sound` | `id`、`effect` 0〜10 |
+| `identify` | `id` |
+| `stop` | 任意で `id`。省くと全台 |
+
+`id` は 1〜9。`drive` `led` `sound` `stop` は `"all"` も取れる。
+
+`move` の結果は `reached`（到着）、`timeout`、`off_mat`（マットから外れた）、`interrupted`（`stop` や別の命令で中断）、
+`disconnected`、`no_response` など。`"wait": false` を付けるとすぐ返り、結果は `status` の `busy` と `last_result` で見る。
+
+次の目標は、何も動かさずに拒否する。
+
+- マットの端から 15 単位以内
+- 他のキューブの現在地、または移動中のキューブの目標から 35 単位（約 48 mm）以内
+
+隣り合うマスの中心は約 43 単位離れているので、1 マスに 1 台なら隣同士に置ける。
+走行中の経路が交差してぶつかることは防がない。
+
 ## テスト
 
 ```sh
 c++ -std=c++17 -Ifirmware/include firmware/test_host/test_mecanum.cpp -o /tmp/t && /tmp/t
+(cd client && python3 -m unittest test_toio test_toio_hub)
 ```
 
 ## 曲に合わせた固定振付（ライブ解析が間に合わない時の保険）

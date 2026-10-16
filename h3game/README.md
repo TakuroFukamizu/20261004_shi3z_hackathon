@@ -3,12 +3,21 @@
 DOF Reality **H3**(3軸モーションプラットフォーム)に座って遊ぶ、声とレバーで進む 3 シーンのゲーム。
 2026-10-04 のハッカソンで作った。別の PC と手元の LLM サーバーで動かす手順は [INSTALL.md](INSTALL.md)。
 
-```
-ブラウザ(web/)  ──HTTP 30回/秒──▶  bridge.py  ──USB シリアル──▶  H3 の制御ボックス
-   │                                  │
-   │ 音声認識(Chrome → Google)          ├── joy_reader.py(スティック・ペダルを pygame で読む)
-   │                                  └── /ai → OpenAI 互換の LLM サーバー(文字だけ)
-   └── マイク(getUserMedia)
+```mermaid
+flowchart LR
+    subgraph PC
+        B[Chrome<br>web/ の画面]
+        S[bridge.py<br>:8891]
+        J[joy_reader.py<br>pygame]
+    end
+    B -- "席の動き(HTTP 30回/秒)" --> S
+    B -- "判定の依頼 /ai" --> S
+    S -- "USB シリアル 500000 baud" --> H3[H3 制御ボックス]
+    J -- "スティック・ペダルの値" --> S
+    S -- "/pads" --> B
+    B -- "音声認識(Web Speech)" --> G[Google]
+    M[USB マイク] -- getUserMedia --> B
+    S -- "文字だけ(OpenAI 互換)" --> L[LLM サーバー<br>llama.cpp / Ollama]
 ```
 
 ## 遊び方

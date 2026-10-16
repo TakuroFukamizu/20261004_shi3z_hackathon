@@ -2,8 +2,10 @@
 
 M5Stack 公式 StackChan のボディ（K151）に **Core2** を載せ、**M5StickC Plus** が制御する RoverC Pro に乗せた機体を PC から動かす。
 
-```
-PC ──HTTP / USB シリアル──▶ Core2（顔・声・首）──ESP-NOW──▶ StickC Plus（車輪・グリッパー）
+```mermaid
+flowchart LR
+    PC -- "HTTP / USB シリアル" --> C[Core2<br>顔・声・首]
+    C -- "ESP-NOW" --> S[StickC Plus<br>車輪・グリッパー]
 ```
 
 PC は Core2 にだけ話しかける。turn 2 からは PC 上の常駐ハブ経由で操作する（下の「リアルタイム制御」）。走行系のコマンドは Core2 が ESP-NOW で StickC Plus に転送する。

@@ -2,6 +2,14 @@
 
 所要時間の目安: 30 分(LLM のモデルのダウンロードを除く)。
 
+```mermaid
+flowchart LR
+    PC["ゲーム用 PC<br>bridge.py + Chrome"] -- USB --> H3[H3 制御ボックス]
+    PC -- USB --> IN[スティック 2 本・ペダル・マイク]
+    PC -- "HTTP /v1/chat/completions" --> LLM["LLM サーバー<br>(同じ PC でも可)"]
+    PC -- "音声認識" --> NET[インターネット]
+```
+
 ## 用意するもの
 
 | もの | 備考 |

@@ -9,6 +9,7 @@ PC ──HTTP / USB シリアル──▶ Core2（顔・声・首）──ESP-NO
 PC は Core2 にだけ話しかける。turn 2 からは PC 上の常駐ハブ経由で操作する（下の「リアルタイム制御」）。走行系のコマンドは Core2 が ESP-NOW で StickC Plus に転送する。
 StickC Plus に Wi-Fi 設定は不要で、Core2 のビーコンを探してチャンネルを自動で合わせる。
 
+- `h3game/` DOF Reality H3（モーションプラットフォーム）で遊ぶ 3 シーンのゲーム。別物なので [h3game/README.md](h3game/README.md) と [h3game/INSTALL.md](h3game/INSTALL.md) を見る。
 - `firmware/` Core2 用ファームウェア（PlatformIO）。顔、声、首、コマンド受付。
 - `firmware-rover/` M5StickC Plus 用ファームウェア。車輪、グリッパー。
 - `client/robot.py` PC 用 CLI 兼 Python ライブラリ（標準ライブラリのみ）。

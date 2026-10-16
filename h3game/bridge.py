@@ -66,12 +66,14 @@ def gemini(prompt, want_json=False, image_b64=None, timeout=25, audio_b64=None):
             return ""
     return ""
 
-LLM_URL = os.environ.get("H3_LLM_URL", "http://192.168.100.143:8080/v1/chat/completions")   # 会場の GPU サーバー(Qwen2.5-3B, OpenAI 互換)
+LLM_URL = os.environ.get("H3_LLM_URL", "http://192.168.100.143:8080/v1/chat/completions")   # OpenAI 互換の chat/completions(llama.cpp server, Ollama など)
+LLM_MODEL = os.environ.get("H3_LLM_MODEL", "")   # Ollama のようにモデル名が必要なサーバーでは指定する
 
 def llm(prompt, want_json=False, timeout=15):
     """文字だけの LLM に聞く(音声は渡せない)。失敗したら "" を返す。"""
     import urllib.request
     body = {"messages": [{"role": "user", "content": prompt}], "temperature": 0.8, "max_tokens": 300}
+    if LLM_MODEL: body["model"] = LLM_MODEL
     if want_json: body["response_format"] = {"type": "json_object"}
     try:
         req = urllib.request.Request(LLM_URL, data=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
